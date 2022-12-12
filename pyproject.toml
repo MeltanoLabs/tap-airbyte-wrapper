@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "tap-airbyte"
+version = "0.0.1"
+description = "`tap-airbyte` is a Singer tap for Airbyte, built with the Meltano Singer SDK."
+authors = ["Alex Butler"]
+keywords = ["ELT", "Airbyte"]
+license = "Apache 2.0"
+
+[tool.poetry.dependencies]
+python = "<3.11,>=3.7.1"
+requests = "^2.25.1"
+singer-sdk = { version = "^0.14.0" }
+fs-s3fs = { version = "^1.1.1", optional = true }
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.5"
+tox = "^3.24.4"
+flake8 = "^3.9.2"
+black = ">=21"
+pydocstyle = "^6.1.1"
+mypy = "^0.910"
+types-requests = "^2.26.1"
+isort = "^5.10.1"
+
+[tool.poetry.extras]
+s3 = ["fs-s3fs"]
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3     # Vertical Hanging Indent
+src_paths = "tap_airbyte"
+
+[build-system]
+requires = ["poetry-core>=1.0.8"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+# CLI declaration
+tap-airbyte = 'tap_airbyte.tap:TapAirbyte.cli'
