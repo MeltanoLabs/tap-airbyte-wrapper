@@ -6,12 +6,16 @@ import time
 from copy import deepcopy
 from enum import Enum
 from functools import lru_cache
+from queue import Empty, Queue
 from tempfile import TemporaryDirectory
 from threading import Lock, Thread
-from typing import Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
+import singer_sdk._singerlib as singer
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
+
+STDOUT_LOCK = Lock()
 
 
 class AirbyteMessage(str, Enum):
@@ -19,7 +23,9 @@ class AirbyteMessage(str, Enum):
     STATE = "STATE"
     LOG = "LOG"
     TRACE = "TRACE"
-    ACTIVATION = "ACTIVATION"
+    CATALOG = "CATALOG"
+    SPEC = "SPEC"
+    CONNECTION_STATUS = "CONNECTION_STATUS"
 
 
 # These translate between Singer's replication method and Airbyte's sync mode
@@ -55,10 +61,11 @@ class TapAirbyte(Tap):
     ).to_dict()
 
     conf_dir: str = "/tmp"
-    buffers = {}
-    state = {}
-    airbyte_job: Thread
-    # {spec,check,discover,read} are all implemented as methods
+    buffers: Dict[str, Queue] = {}
+    state: Dict[str, Any] = {}
+    # SPMC = Singer Producer, Multiple Consumers
+    airbyte_producer: Thread
+    singer_consumers: List[Thread] = []
 
     @lru_cache
     def _pull_source_image(self):
@@ -122,6 +129,7 @@ class TapAirbyte(Tap):
                     f"{self.conf_dir}/catalog.json",
                 ],
                 stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
             atexit.register(proc.kill)
@@ -134,31 +142,62 @@ class TapAirbyte(Tap):
                 except json.JSONDecodeError:
                     self.logger.warn("Could not parse message: %s", message)
                     continue
-                # print(airbyte_message)
                 if airbyte_message["type"] == AirbyteMessage.LOG:
                     self.logger.info(airbyte_message["log"])
                 elif airbyte_message["type"] == AirbyteMessage.TRACE:
-                    self.logger.critical(airbyte_message["trace"])
-                    exit(1)
+                    if "message" in airbyte_message["trace"]:
+                        self.logger.critical(
+                            airbyte_message["trace"]["message"],
+                            exc_info=Exception(
+                                airbyte_message["trace"].get(
+                                    "stack_trace", "No stack trace available"
+                                )
+                            ),
+                        )
+                        exit(1)
+                    self.logger.debug(airbyte_message["trace"])
                 elif airbyte_message["type"] == AirbyteMessage.STATE:
                     self.state = airbyte_message["state"]
                 elif airbyte_message["type"] == AirbyteMessage.RECORD:
-                    stream_buffer = self.buffers.setdefault(
+                    stream_buffer: Queue = self.buffers.setdefault(
                         airbyte_message["record"]["stream"],
-                        {"stream_buffer_lock": Lock(), "records": []},
+                        Queue(),
                     )
-                    with stream_buffer["stream_buffer_lock"]:
-                        stream_buffer["records"].append(
-                            airbyte_message["record"]["data"]
-                        )
+                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
                 else:
                     self.logger.warn("Unhandled message: %s", airbyte_message)
             atexit.unregister(proc.kill)
 
+    def sync_one(self, stream: Stream) -> None:
+        stream.sync()
+        stream.finalize_state_progress_markers()
+        stream._write_state_message()
+
     def sync_all(self) -> None:  # type: ignore
-        self.airbyte_job = Thread(target=self.run_read, daemon=True)
-        self.airbyte_job.start()
-        super().sync_all()
+        self.airbyte_producer = Thread(target=self.run_read, daemon=True)
+        self.airbyte_producer.start()
+        self._reset_state_progress_markers()
+        self._set_compatible_replication_methods()
+        stream: Stream
+        for stream in self.streams.values():
+            if not stream.selected and not stream.has_selected_descendents:
+                self.logger.info(f"Skipping deselected stream '{stream.name}'.")
+                continue
+            if stream.parent_stream_type:
+                self.logger.debug(
+                    f"Child stream '{type(stream).__name__}' is expected to be called "
+                    f"by parent stream '{stream.parent_stream_type.__name__}'. "
+                    "Skipping direct invocation."
+                )
+                continue
+            consumer = Thread(target=self.sync_one, args=(stream,), daemon=True)
+            consumer.start()
+            self.singer_consumers.append(consumer)
+        self.airbyte_producer.join()
+        for sync in self.singer_consumers:
+            sync.join()
+        for stream in self.streams.values():
+            stream.log_sync_costs()
 
     def setup(self) -> None:
         self.image = self.config["airbyte_spec"]["image"]
@@ -175,36 +214,40 @@ class TapAirbyte(Tap):
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "w") as f:
                 json.dump(self.config["connector_config"], f)
-            airbyte_catalog = json.loads(
-                subprocess.run(
-                    [
-                        "docker",
-                        "run",
-                        "--rm",
-                        "-i",
-                        "-v",
-                        f"{tmpdir}:{self.conf_dir}",
-                        f"{self.image}:{self.tag}",
-                        "discover",
-                        "--config",
-                        f"{self.conf_dir}/config.json",
-                    ],
-                    check=True,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                ).stdout
-            )
-        return airbyte_catalog["catalog"]
+            discover = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-i",
+                    "-v",
+                    f"{tmpdir}:{self.conf_dir}",
+                    f"{self.image}:{self.tag}",
+                    "discover",
+                    "--config",
+                    f"{self.conf_dir}/config.json",
+                ],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout
+        for line in discover.splitlines():
+            try:
+                airbyte_message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if airbyte_message["type"] == AirbyteMessage.CATALOG:
+                return airbyte_message["catalog"]
+        raise Exception("Could not discover catalog")
 
     @property
     def configured_airbyte_catalog(self) -> dict:
         output = {"streams": []}
         for stream in self.airbyte_catalog["streams"]:
-            # TODO: figure out select
+            # TODO: figure out select, when is self.streams populated?
             # if stream["name"] not in self.streams:
-                # as we try to introduce `select` interoperability
-                # print(f"{stream['name']:.<39}.skipped")
-                # continue
+            #   print(f"{stream['name']:.<39}.skipped")
+            #   continue
             output["streams"].append(
                 {
                     "stream": stream,
@@ -218,8 +261,9 @@ class TapAirbyte(Tap):
 
     def discover_streams(self) -> List[Stream]:
         self.setup()
-        temp_airbyte_catalog = deepcopy(self.airbyte_catalog)
-        output_streams = []
+        temp_airbyte_catalog: Dict[str, Any] = deepcopy(self.airbyte_catalog)
+        output_streams: List[AirbyteStream] = []
+        stream: Dict[str, Any]
         for stream in temp_airbyte_catalog["streams"]:
             stream_name = stream["name"]
             stream_schema = stream["json_schema"]
@@ -228,8 +272,22 @@ class TapAirbyte(Tap):
                 name=stream_name,
                 schema=stream_schema,
             )
-            if stream.get("source_defined_cursor"):
-                airbyte_stream.primary_keys = stream["default_cursor_field"][0]
+            try:
+                if "cursor_field" in stream and isinstance(
+                    stream["cursor_field"][0], str
+                ):
+                    # this is [str, ...?] in the Airbyte catalog
+                    airbyte_stream.replication_key = stream["cursor_field"][0]
+            except IndexError:
+                pass
+            try:
+                if "primary_key" in stream and isinstance(
+                    stream["primary_key"][0], List
+                ):
+                    # this is [[str, ...]] in the Airbyte catalog
+                    airbyte_stream.primary_keys = stream["primary_key"][0]
+            except IndexError:
+                pass
             output_streams.append(
                 AirbyteStream(
                     tap=self,
@@ -246,28 +304,40 @@ class AirbyteStream(Stream):
     def __init__(self, tap: TapAirbyte, schema: dict, name: str) -> None:
         super().__init__(tap, schema, name)
         self.parent = tap
+        self.queue = Queue()
+        self._buffer: Optional[Queue] = None
 
-    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
-        """Get records from the stream."""
-        while self.parent.airbyte_job.is_alive():
-            if not (
-                self.name in self.parent.buffers
-                and len(self.parent.buffers[self.name]["records"]) > 0
-            ):
+    def _write_record_message(self, record: dict) -> None:
+        for record_message in self._generate_record_messages(record):
+            with STDOUT_LOCK:
+                singer.write_message(record_message)
+
+    @property
+    def buffer(self) -> Queue:
+        """Get the buffer for the stream."""
+        if not self._buffer:
+            while self.name not in self.parent.buffers:
                 self.logger.debug(
                     f"Waiting for records from Airbyte for stream {self.name}..."
                 )
                 time.sleep(1)
                 continue
-            with self.parent.buffers[self.name]["stream_buffer_lock"]:
-                while len(self.parent.buffers[self.name]["records"]) > 10:
-                    yield self.parent.buffers[self.name]["records"].pop(0)
-        else:
-            if not self.name in self.parent.buffers:
-                return
-            with self.parent.buffers[self.name]["stream_buffer_lock"]:
-                while len(self.parent.buffers[self.name]["records"]) > 0:
-                    yield self.parent.buffers[self.name]["records"].pop(0)
+            self._buffer = self.parent.buffers[self.name]
+        return self._buffer
+
+    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+        """Get records from the stream."""
+        while self.parent.airbyte_producer.is_alive():
+            try:
+                yield self.buffer.get(timeout=1)
+            except Empty:
+                continue
+            self.buffer.task_done()
+        if not self.name in self.parent.buffers:
+            return
+        while not self.buffer.empty():
+            yield self.buffer.get()
+            self.buffer.task_done()
 
 
 if __name__ == "__main__":
