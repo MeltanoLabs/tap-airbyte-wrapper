@@ -63,7 +63,7 @@ class TapAirbyte(Tap):
     conf_dir: str = "/tmp"
     buffers: Dict[str, Queue] = {}
     state: Dict[str, Any] = {}
-    # SPMC = Singer Producer, Multiple Consumers
+    # Airbyte -> Demultiplexer -< Singer Streams
     airbyte_producer: Thread
     singer_consumers: List[Thread] = []
 
@@ -201,6 +201,7 @@ class TapAirbyte(Tap):
         for stream in self.streams.values():
             stream.log_sync_costs()
 
+    @lru_cache
     def setup(self) -> None:
         self.image = self.config["airbyte_spec"]["image"]
         self.tag = self.config["airbyte_spec"].get("tag", "latest")
