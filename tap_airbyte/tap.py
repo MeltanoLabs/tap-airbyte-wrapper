@@ -82,15 +82,33 @@ class TapAirbyte(Tap):
         )
 
     def run_spec(self):
-        subprocess.run(
-            ["docker", "run", f"{self.image}:{self.tag}", "spec"], check=True
+        output = subprocess.run(
+            ["docker", "run", f"{self.image}:{self.tag}", "spec"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        for line in output.stdout.splitlines():
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                self.logger.warn("Could not parse message: %s", line)
+                continue
+            if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
+                self._process_log_message(message)
+            elif message["type"] == AirbyteMessage.SPEC:
+                self.logger.info(message["spec"])
+                return message["spec"]
+            else:
+                self.logger.warn("Unhandled message: %s", message)
+        raise Exception("No spec found")
 
     def run_check(self):
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "w") as f:
                 json.dump(self.config["connector_config"], f)
-            subprocess.run(
+            output = subprocess.run(
                 [
                     "docker",
                     "run",
@@ -104,7 +122,28 @@ class TapAirbyte(Tap):
                     f"{self.conf_dir}/config.json",
                 ],
                 check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
+        for line in output.stdout.splitlines():
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                self.logger.warn("Could not parse message: %s", line)
+                continue
+            if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
+                self._process_log_message(message)
+            elif message["type"] == AirbyteMessage.CONNECTION_STATUS:
+                if message["connectionStatus"]["status"] == "SUCCEEDED":
+                    self.logger.info("Connection check succeeded")
+                else:
+                    self.logger.error(
+                        "Connection check failed: %s",
+                        message["connectionStatus"]["message"],
+                    )
+            else:
+                self.logger.warn("Unhandled message: %s", message)
 
     def run_read(self):
         with TemporaryDirectory() as tmpdir:
@@ -142,22 +181,11 @@ class TapAirbyte(Tap):
                 except json.JSONDecodeError:
                     self.logger.warn("Could not parse message: %s", message)
                     continue
-                if airbyte_message["type"] == AirbyteMessage.LOG:
-                    self.logger.info(airbyte_message["log"])
-                elif airbyte_message["type"] == AirbyteMessage.TRACE:
-                    if "message" in airbyte_message["trace"]:
-                        # The spec is ambiguous here as it mentions external_message
-                        # but the jsonschema shows message
-                        self.logger.critical(
-                            airbyte_message["trace"]["message"],
-                            exc_info=Exception(
-                                airbyte_message["trace"].get(
-                                    "stack_trace", "No stack trace available"
-                                )
-                            ),
-                        )
-                        exit(1)
-                    self.logger.debug(airbyte_message["trace"])
+                if airbyte_message["type"] in (
+                    AirbyteMessage.LOG,
+                    AirbyteMessage.TRACE,
+                ):
+                    self._process_log_message(airbyte_message)
                 elif airbyte_message["type"] == AirbyteMessage.STATE:
                     self.state = airbyte_message["state"]
                 elif airbyte_message["type"] == AirbyteMessage.RECORD:
@@ -169,6 +197,22 @@ class TapAirbyte(Tap):
                 else:
                     self.logger.warn("Unhandled message: %s", airbyte_message)
             atexit.unregister(proc.kill)
+
+    def _process_log_message(self, airbyte_message: Dict[str, Any]) -> None:
+        if airbyte_message["type"] == AirbyteMessage.LOG:
+            self.logger.info(airbyte_message["log"])
+        elif airbyte_message["type"] == AirbyteMessage.TRACE:
+            if airbyte_message["trace"].get("type") == "ERROR":
+                self.logger.critical(
+                    airbyte_message["trace"]["error"]["message"],
+                    exc_info=Exception(
+                        airbyte_message["trace"]["error"].get(
+                            "stack_trace", "No stack trace available"
+                        )
+                    ),
+                )
+                exit(1)
+            self.logger.debug(airbyte_message["trace"])
 
     def sync_one(self, stream: Stream) -> None:
         stream.sync()
@@ -233,13 +277,16 @@ class TapAirbyte(Tap):
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             ).stdout
         for line in discover.splitlines():
             try:
                 airbyte_message = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if airbyte_message["type"] == AirbyteMessage.CATALOG:
+            if airbyte_message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
+                self._process_log_message(airbyte_message)
+            elif airbyte_message["type"] == AirbyteMessage.CATALOG:
                 return airbyte_message["catalog"]
         raise Exception("Could not discover catalog")
 
