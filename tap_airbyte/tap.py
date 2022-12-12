@@ -84,7 +84,6 @@ class TapAirbyte(Tap):
     def run_spec(self):
         output = subprocess.run(
             ["docker", "run", f"{self.image}:{self.tag}", "spec"],
-            check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -121,7 +120,6 @@ class TapAirbyte(Tap):
                     "--config",
                     f"{self.conf_dir}/config.json",
                 ],
-                check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -274,7 +272,6 @@ class TapAirbyte(Tap):
                     "--config",
                     f"{self.conf_dir}/config.json",
                 ],
-                check=True,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
