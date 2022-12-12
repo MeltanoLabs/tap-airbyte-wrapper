@@ -146,6 +146,8 @@ class TapAirbyte(Tap):
                     self.logger.info(airbyte_message["log"])
                 elif airbyte_message["type"] == AirbyteMessage.TRACE:
                     if "message" in airbyte_message["trace"]:
+                        # The spec is ambiguous here as it mentions external_message
+                        # but the jsonschema shows message
                         self.logger.critical(
                             airbyte_message["trace"]["message"],
                             exc_info=Exception(
@@ -329,6 +331,7 @@ class AirbyteStream(Stream):
         """Get records from the stream."""
         while self.parent.airbyte_producer.is_alive():
             try:
+                # The timeout permits the consumer to re-check the producer is alive
                 yield self.buffer.get(timeout=1)
             except Empty:
                 continue
