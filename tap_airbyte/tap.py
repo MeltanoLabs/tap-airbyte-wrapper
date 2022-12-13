@@ -34,6 +34,8 @@ REPLICATION_METHOD_MAP = {
     "INCREMENTAL": "INCREMENTAL",
     "LOG_BASED": "INCREMENTAL",
 }
+# We are piping to Singer targets, so this field is irrelevant
+NOOP_AIRBYTE_SYNC_MODE = "append"
 
 
 class TapAirbyte(Tap):
@@ -150,6 +152,9 @@ class TapAirbyte(Tap):
             ) as catalog:
                 json.dump(self.config.get("connector_config", {}), config)
                 json.dump(self.configured_airbyte_catalog, catalog)
+            if self.state:
+                with open(f"{tmpdir}/state.json", "w") as state:
+                    json.dump(self.state, state)
             proc = subprocess.Popen(
                 [
                     "docker",
@@ -164,7 +169,8 @@ class TapAirbyte(Tap):
                     f"{self.conf_dir}/config.json",
                     "--catalog",
                     f"{self.conf_dir}/catalog.json",
-                ],
+                ]
+                + (["--state", f"{self.conf_dir}/state.json"] if self.state else []),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -288,17 +294,24 @@ class TapAirbyte(Tap):
     def configured_airbyte_catalog(self) -> dict:
         output = {"streams": []}
         for stream in self.airbyte_catalog["streams"]:
+            entry = self.catalog.get_stream(stream["name"])
+            if entry is None:
+                continue
+            if entry.metadata.root.selected is False:
+                continue
             try:
-                sync_mode = stream["supported_sync_modes"][0]
+                sync_mode = REPLICATION_METHOD_MAP.get(
+                    entry.replication_method.upper(), stream["supported_sync_modes"][0]
+                )
             except (IndexError, KeyError):
-                sync_mode = "full_refresh"
+                sync_mode = "FULL_REFRESH"
             output["streams"].append(
                 {
                     "stream": stream,
                     # This should be sourced from the user's config w/ default from catalog 0 index
-                    "sync_mode": sync_mode,
+                    "sync_mode": sync_mode.lower(),
                     # This is not used by the Singer targets we pipe to
-                    "destination_sync_mode": "append",
+                    "destination_sync_mode": NOOP_AIRBYTE_SYNC_MODE,
                 }
             )
         return output
