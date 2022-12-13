@@ -536,6 +536,9 @@ class AirbyteStream(Stream):
     def _write_state_message(self) -> None:
         pass
 
+    def _increment_stream_state(self, *args, **kwargs) -> None:
+        pass
+
     @property
     def buffer(self) -> Queue:
         """Get the buffer for the stream."""
