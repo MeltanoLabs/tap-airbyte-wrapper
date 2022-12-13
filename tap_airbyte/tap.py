@@ -62,7 +62,7 @@ class TapAirbyte(Tap):
 
     conf_dir: str = "/tmp"
     buffers: Dict[str, Queue] = {}
-    state: Dict[str, Any] = {}
+    airbyte_state: Dict[str, Any] = {}
     # Airbyte -> Demultiplexer -< Singer Streams
     airbyte_producer: Thread
     singer_consumers: List[Thread] = []
@@ -185,7 +185,9 @@ class TapAirbyte(Tap):
                 ):
                     self._process_log_message(airbyte_message)
                 elif airbyte_message["type"] == AirbyteMessage.STATE:
-                    self.state = airbyte_message["state"]
+                    self.airbyte_state = airbyte_message["state"]
+                    with STDOUT_LOCK:
+                        singer.write_message(singer.StateMessage(self.airbyte_state))
                 elif airbyte_message["type"] == AirbyteMessage.RECORD:
                     stream_buffer: Queue = self.buffers.setdefault(
                         airbyte_message["record"]["stream"],
@@ -227,19 +229,14 @@ class TapAirbyte(Tap):
             if not stream.selected and not stream.has_selected_descendents:
                 self.logger.info(f"Skipping deselected stream '{stream.name}'.")
                 continue
-            if stream.parent_stream_type:
-                self.logger.debug(
-                    f"Child stream '{type(stream).__name__}' is expected to be called "
-                    f"by parent stream '{stream.parent_stream_type.__name__}'. "
-                    "Skipping direct invocation."
-                )
-                continue
             consumer = Thread(target=self.sync_one, args=(stream,), daemon=True)
             consumer.start()
             self.singer_consumers.append(consumer)
         self.airbyte_producer.join()
         for sync in self.singer_consumers:
             sync.join()
+        with STDOUT_LOCK:
+            singer.write_message(singer.StateMessage(self.airbyte_state))
         for stream in self.streams.values():
             stream.log_sync_costs()
 
@@ -291,15 +288,15 @@ class TapAirbyte(Tap):
     def configured_airbyte_catalog(self) -> dict:
         output = {"streams": []}
         for stream in self.airbyte_catalog["streams"]:
-            # TODO: figure out select, when is self.streams populated?
-            # if stream["name"] not in self.streams:
-            #   print(f"{stream['name']:.<39}.skipped")
-            #   continue
+            try:
+                sync_mode = stream["supported_sync_modes"][0]
+            except (IndexError, KeyError):
+                sync_mode = "full_refresh"
             output["streams"].append(
                 {
                     "stream": stream,
                     # This should be sourced from the user's config w/ default from catalog 0 index
-                    "sync_mode": "incremental",
+                    "sync_mode": sync_mode,
                     # This is not used by the Singer targets we pipe to
                     "destination_sync_mode": "append",
                 }
@@ -320,19 +317,19 @@ class TapAirbyte(Tap):
                 schema=stream_schema,
             )
             try:
-                if "cursor_field" in stream and isinstance(
-                    stream["cursor_field"][0], str
-                ):
-                    # this is [str, ...?] in the Airbyte catalog
+                # this is [str, ...?] in the Airbyte catalog
+                if "cursor_field" in stream and isinstance(stream["cursor_field"][0], str):
                     airbyte_stream.replication_key = stream["cursor_field"][0]
             except IndexError:
                 pass
             try:
-                if "primary_key" in stream and isinstance(
-                    stream["primary_key"][0], List
-                ):
-                    # this is [[str, ...]] in the Airbyte catalog
+                # this is [[str, ...]] in the Airbyte catalog
+                if "primary_key" in stream and isinstance(stream["primary_key"][0], List):
                     airbyte_stream.primary_keys = stream["primary_key"][0]
+                elif "source_defined_primary_key" in stream and isinstance(
+                    stream["source_defined_primary_key"][0], List
+                ):
+                    airbyte_stream.primary_keys = stream["source_defined_primary_key"][0]
             except IndexError:
                 pass
             output_streams.append(
@@ -359,17 +356,24 @@ class AirbyteStream(Stream):
             with STDOUT_LOCK:
                 singer.write_message(record_message)
 
+    def _write_state_message(self) -> None:
+        pass
+
     @property
     def buffer(self) -> Queue:
         """Get the buffer for the stream."""
         if not self._buffer:
             while self.name not in self.parent.buffers:
-                self.logger.debug(
-                    f"Waiting for records from Airbyte for stream {self.name}..."
-                )
+                if not self.parent.airbyte_producer.is_alive():
+                    self.logger.debug(
+                        f"Airbyte producer died before records were received for stream {self.name}"
+                    )
+                    self._buffer = Queue()
+                    break
+                self.logger.debug(f"Waiting for records from Airbyte for stream {self.name}...")
                 time.sleep(1)
-                continue
-            self._buffer = self.parent.buffers[self.name]
+            else:
+                self._buffer = self.parent.buffers[self.name]
         return self._buffer
 
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
@@ -381,11 +385,10 @@ class AirbyteStream(Stream):
             except Empty:
                 continue
             self.buffer.task_done()
-        if not self.name in self.parent.buffers:
-            return
-        while not self.buffer.empty():
-            yield self.buffer.get()
-            self.buffer.task_done()
+        if self.name in self.parent.buffers:
+            while not self.buffer.empty():
+                yield self.buffer.get()
+                self.buffer.task_done()
 
 
 if __name__ == "__main__":
