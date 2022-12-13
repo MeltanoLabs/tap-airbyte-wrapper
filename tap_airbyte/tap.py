@@ -466,7 +466,7 @@ class TapAirbyte(Tap):
                 sync_mode = REPLICATION_METHOD_MAP.get(
                     entry.replication_method.upper(), stream["supported_sync_modes"][0]
                 )
-                if sync_mode not in stream["supported_sync_modes"]:
+                if sync_mode.lower() not in stream["supported_sync_modes"]:
                     sync_mode = stream["supported_sync_modes"][0]
             except (IndexError, KeyError):
                 sync_mode = "FULL_REFRESH"
