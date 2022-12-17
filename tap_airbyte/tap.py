@@ -1,9 +1,10 @@
 """Airbyte tap class."""
 import atexit
-import json
 import subprocess
+import sys
 import time
-from copy import deepcopy
+from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path, PurePath
@@ -11,8 +12,10 @@ from queue import Empty, Queue
 from tempfile import TemporaryDirectory
 from threading import Lock, Thread
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from uuid import UUID
 
 import click
+import orjson
 import singer_sdk._singerlib as singer
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
@@ -20,7 +23,34 @@ from singer_sdk.cli import common_options
 from singer_sdk.helpers._classproperty import classproperty
 from singer_sdk.tap_base import CliTestOptionValue
 
+
+def default(obj):
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, UUID):
+        return str(obj)
+    elif isinstance(obj, bytes):
+        return obj.decode("utf-8")
+    elif isinstance(obj, Enum):
+        return obj.value
+    return str(obj)
+
+
+def write_message(message) -> None:
+    sys.stdout.buffer.write(
+        orjson.dumps(message.to_dict(), option=orjson.OPT_APPEND_NEWLINE, default=default)
+    )
+    sys.stdout.buffer.flush()
+
+
 STDOUT_LOCK = Lock()
+singer.write_message = write_message
+
+
+class AirbyteException(Exception):
+    pass
 
 
 class AirbyteMessage(str, Enum):
@@ -74,14 +104,6 @@ class TapAirbyte(Tap):
     airbyte_producer: Thread
     singer_consumers: List[Thread] = []
 
-    @lru_cache
-    def _pull_source_image(self):
-        subprocess.run(
-            ["docker", "pull", "--quiet", f"{self.image}:{self.tag}"],
-            check=True,
-            capture_output=True,
-        )
-
     def run_help(self):
         subprocess.run(
             ["docker", "run", f"{self.image}:{self.tag}", "--help"],
@@ -93,12 +115,11 @@ class TapAirbyte(Tap):
             ["docker", "run", f"{self.image}:{self.tag}", "spec"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
         )
         for line in output.stdout.splitlines():
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
+                message = orjson.loads(line)
+            except orjson.JSONDecodeError:
                 self.logger.warn("Could not parse message: %s", line)
                 continue
             if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
@@ -107,7 +128,31 @@ class TapAirbyte(Tap):
                 return message["spec"]
             else:
                 self.logger.warn("Unhandled message: %s", message)
-        raise Exception("No spec found")
+        raise AirbyteException("No spec found")
+
+    @staticmethod
+    def print_spec_as_config(spec: Dict[str, Any]) -> None:
+        print("\nSetup Instructions:\n")
+        print("connector_config:")
+        for prop, schema in spec["properties"].items():
+            if "description" in schema:
+                print(f"  # {schema['description']}")
+            print(f"  {prop}: {'fixme' if schema['type'] != 'object' else ''}")
+            if schema["type"] == "object":
+                if "oneOf" in schema:
+                    for i, one_of in enumerate(schema["oneOf"]):
+                        print(f"    # Option {i + 1}")
+                        for inner_prop, inner_schema in one_of["properties"].items():
+                            if inner_prop == "option_title":
+                                continue
+                            if "description" in inner_schema:
+                                print(f"    # {inner_schema['description']}")
+                            print(f"    {inner_prop}: fixme")
+                else:
+                    for inner_prop, inner_schema in schema["properties"].items():
+                        if "description" in inner_schema:
+                            print(f"    # {inner_schema['description']}")
+                        print(f"    {inner_prop}: fixme")
 
     @classproperty
     def cli(cls) -> Callable:
@@ -158,89 +203,54 @@ class TapAirbyte(Tap):
             if version:
                 cls.print_version()
                 return
-
             if not about:
                 cls.print_version(print_fn=cls.logger.info)
-            else:
-                cls.discover_streams = lambda self: []
-
             validate_config: bool = True
             if discover or about:
                 validate_config = False
-
             parse_env_config = False
             config_files: list[PurePath] = []
             for config_path in config:
                 if config_path == "ENV":
                     parse_env_config = True
                     continue
-
                 if not Path(config_path).is_file():
                     raise FileNotFoundError(
                         f"Could not locate config file at '{config_path}'."
                         "Please check that the file exists."
                     )
-
                 config_files.append(Path(config_path))
-
-            try:
-                tap: TapAirbyte = cls(  # type: ignore
-                    config=config_files or None,
-                    state=state,
-                    catalog=catalog,
-                    parse_env_config=parse_env_config,
-                    validate_config=validate_config,
-                )
-            except Exception as exc:
-                if about:
+            # Enrich about info with spec if possible
+            if about:
+                cls.discover_streams = lambda _: []
+                try:
+                    tap: TapAirbyte = cls(  # type: ignore
+                        config=config_files or None,
+                        state=state,
+                        catalog=catalog,
+                        parse_env_config=parse_env_config,
+                        validate_config=validate_config,
+                    )
+                except Exception:
                     cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
                     cls.print_about(format=format)
-                    return
-                raise exc
-
-            if about:
-                cls.logger.info(
-                    "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
-                )
-                spec = tap.run_spec()["connectionSpecification"]
-                TapAirbyte.config_jsonschema["properties"]["connector_config"] = spec
-                TapAirbyte.print_about(format=format)
-                print("\nSetup Instructions:\n")
-
-                # TODO: left for contemplation
-                # print("settings:")
-                # for prop, schema in spec["properties"].items():
-                #     print(f"  - name: {prop}")
-                #     print(f"    description: |")
-                #     print(f"      {schema.get('description', '')}")
-                #     if "examples" in schema:
-                #         print(f"      Examples -> {schema['examples']}")
-                #     if "pattern" in schema:
-                #         print(f"      Pattern  -> {schema['pattern']}")
-
-                # TODO: move this to a recursive function...
-                print("connector_config:")
-                for prop, schema in spec["properties"].items():
-                    if "description" in schema:
-                        print(f"  # {schema['description']}")
-                    print(f"  {prop}: {'fixme' if schema['type'] != 'object' else ''}")
-                    if schema["type"] == "object":
-                        if "oneOf" in schema:
-                            for i, one_of in enumerate(schema["oneOf"]):
-                                print(f"    # Option {i + 1}")
-                                for inner_prop, inner_schema in one_of["properties"].items():
-                                    if inner_prop == "option_title":
-                                        continue
-                                    if "description" in inner_schema:
-                                        print(f"    # {inner_schema['description']}")
-                                    print(f"    {inner_prop}: fixme")
-                        else:
-                            for inner_prop, inner_schema in schema["properties"].items():
-                                if "description" in inner_schema:
-                                    print(f"    # {inner_schema['description']}")
-                                print(f"    {inner_prop}: fixme")
+                else:
+                    cls.logger.info(
+                        "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
+                    )
+                    spec = tap.run_spec()["connectionSpecification"]
+                    TapAirbyte.config_jsonschema["properties"]["connector_config"] = spec
+                    TapAirbyte.print_about(format=format)
+                    TapAirbyte.print_spec_as_config(spec)
                 return
-
+            # End modification
+            tap: TapAirbyte = cls(  # type: ignore
+                config=config_files or None,
+                state=state,
+                catalog=catalog,
+                parse_env_config=parse_env_config,
+                validate_config=validate_config,
+            )
             if discover:
                 tap.run_discovery()
                 if test == CliTestOptionValue.All.value:
@@ -256,8 +266,8 @@ class TapAirbyte(Tap):
 
     def run_check(self):
         with TemporaryDirectory() as tmpdir:
-            with open(f"{tmpdir}/config.json", "w") as f:
-                json.dump(self.config["connector_config"], f)
+            with open(f"{tmpdir}/config.json", "wb") as f:
+                f.write(orjson.dumps(self.config["connector_config"]))
             output = subprocess.run(
                 [
                     "docker",
@@ -273,12 +283,11 @@ class TapAirbyte(Tap):
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
             )
         for line in output.stdout.splitlines():
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
+                message = orjson.loads(line)
+            except orjson.JSONDecodeError:
                 self.logger.warn("Could not parse message: %s", line)
                 continue
             if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
@@ -300,15 +309,15 @@ class TapAirbyte(Tap):
 
     def run_read(self):
         with TemporaryDirectory() as tmpdir:
-            with open(f"{tmpdir}/config.json", "w") as config, open(
-                f"{tmpdir}/catalog.json", "w"
+            with open(f"{tmpdir}/config.json", "wb") as config, open(
+                f"{tmpdir}/catalog.json", "wb"
             ) as catalog:
-                json.dump(self.config.get("connector_config", {}), config)
-                json.dump(self.configured_airbyte_catalog, catalog)
+                config.write(orjson.dumps(self.config.get("connector_config", {})))
+                catalog.write(orjson.dumps(self.configured_airbyte_catalog))
             if self.airbyte_state:
-                with open(f"{tmpdir}/state.json", "w") as state:
+                with open(f"{tmpdir}/state.json", "wb") as state:
                     self.logger.debug("Using state: %s", self.airbyte_state)
-                    json.dump(self.airbyte_state, state)
+                    state.write(orjson.dumps(self.airbyte_state))
             proc = subprocess.Popen(
                 [
                     "docker",
@@ -327,16 +336,15 @@ class TapAirbyte(Tap):
                 + (["--state", f"{self.conf_dir}/state.json"] if self.airbyte_state else []),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
             )
             atexit.register(proc.kill)
             while True:
                 message = proc.stdout.readline()
-                if message == "" and proc.poll() is not None:
+                if not message and proc.poll() is not None:
                     break
                 try:
-                    airbyte_message = json.loads(message)
-                except json.JSONDecodeError:
+                    airbyte_message = orjson.loads(message)
+                except orjson.JSONDecodeError:
                     self.logger.warn("Could not parse message: %s", message)
                     continue
                 if airbyte_message["type"] in (
@@ -374,9 +382,9 @@ class TapAirbyte(Tap):
             if airbyte_message["trace"].get("type") == "ERROR":
                 self.logger.critical(
                     airbyte_message["trace"]["error"]["message"],
-                    exc_info=Exception(
+                    exc_info=AirbyteException(
                         airbyte_message["trace"]["error"].get(
-                            "stack_trace", "No stack trace available"
+                            "stack_trace", "Airbyte process failed."
                         )
                     ),
                 )
@@ -401,35 +409,33 @@ class TapAirbyte(Tap):
             consumer = Thread(target=self.sync_one, args=(stream,), daemon=True)
             consumer.start()
             self.singer_consumers.append(consumer)
+        t1 = time.perf_counter()
         self.airbyte_producer.join()
         for sync in self.singer_consumers:
             sync.join()
         with STDOUT_LOCK:
             singer.write_message(singer.StateMessage(self.airbyte_state))
+        t2 = time.perf_counter()
         for stream in self.streams.values():
             stream.log_sync_costs()
+        self.logger.info(f"Synced {len(self.streams)} streams in {t2 - t1:0.2f} seconds.")
 
-    @lru_cache
-    def setup(self) -> None:
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         try:
             self.image = self.config["airbyte_spec"]["image"]
             self.tag = self.config["airbyte_spec"].get("tag", "latest")
         except KeyError:
-            raise Exception(
+            raise AirbyteException(
                 "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
             ) from KeyError
-        self._pull_source_image()
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.setup()
 
     @property
     @lru_cache
     def airbyte_catalog(self):
         with TemporaryDirectory() as tmpdir:
-            with open(f"{tmpdir}/config.json", "w") as f:
-                json.dump(self.config["connector_config"], f)
+            with open(f"{tmpdir}/config.json", "wb") as f:
+                f.write(orjson.dumps(self.config["connector_config"]))
             discover = subprocess.run(
                 [
                     "docker",
@@ -443,20 +449,19 @@ class TapAirbyte(Tap):
                     "--config",
                     f"{self.conf_dir}/config.json",
                 ],
-                text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             ).stdout
         for line in discover.splitlines():
             try:
-                airbyte_message = json.loads(line)
-            except json.JSONDecodeError:
+                airbyte_message = orjson.loads(line)
+            except orjson.JSONDecodeError:
                 continue
             if airbyte_message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
                 self._process_log_message(airbyte_message)
             elif airbyte_message["type"] == AirbyteMessage.CATALOG:
                 return airbyte_message["catalog"]
-        raise Exception("Could not discover catalog")
+        raise AirbyteException("Could not discover catalog")
 
     @property
     def configured_airbyte_catalog(self) -> dict:
@@ -478,26 +483,20 @@ class TapAirbyte(Tap):
             output["streams"].append(
                 {
                     "stream": stream,
-                    # This should be sourced from the user's config w/ default from catalog 0 index
                     "sync_mode": sync_mode.lower(),
-                    # This is not used by the Singer targets we pipe to
                     "destination_sync_mode": NOOP_AIRBYTE_SYNC_MODE,
                 }
             )
         return output
 
     def discover_streams(self) -> List[Stream]:
-        self.setup()
-        temp_airbyte_catalog: Dict[str, Any] = deepcopy(self.airbyte_catalog)
         output_streams: List[AirbyteStream] = []
         stream: Dict[str, Any]
-        for stream in temp_airbyte_catalog["streams"]:
-            stream_name = stream["name"]
-            stream_schema = stream["json_schema"]
+        for stream in self.airbyte_catalog["streams"]:
             airbyte_stream = AirbyteStream(
                 tap=self,
-                name=stream_name,
-                schema=stream_schema,
+                name=stream["name"],
+                schema=stream["json_schema"],
             )
             try:
                 # this is [str, ...?] in the Airbyte catalog
@@ -515,13 +514,7 @@ class TapAirbyte(Tap):
                     airbyte_stream.primary_keys = stream["source_defined_primary_key"][0]
             except IndexError:
                 pass
-            output_streams.append(
-                AirbyteStream(
-                    tap=self,
-                    name=stream_name,
-                    schema=stream_schema,
-                )
-            )
+            output_streams.append(airbyte_stream)
         return output_streams
 
 
