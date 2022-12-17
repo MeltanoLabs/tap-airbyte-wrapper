@@ -417,7 +417,6 @@ class TapAirbyte(Tap):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.setup()
 
     @property
     @lru_cache
