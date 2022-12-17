@@ -422,7 +422,6 @@ class TapAirbyte(Tap):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.setup()
 
     @property
     @lru_cache
@@ -487,6 +486,7 @@ class TapAirbyte(Tap):
         return output
 
     def discover_streams(self) -> List[Stream]:
+        self.setup()
         temp_airbyte_catalog: Dict[str, Any] = deepcopy(self.airbyte_catalog)
         output_streams: List[AirbyteStream] = []
         stream: Dict[str, Any]
