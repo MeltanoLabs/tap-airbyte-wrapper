@@ -411,12 +411,18 @@ class TapAirbyte(Tap):
 
     @lru_cache
     def setup(self) -> None:
-        self.image = self.config["airbyte_spec"]["image"]
-        self.tag = self.config["airbyte_spec"].get("tag", "latest")
+        try:
+            self.image = self.config["airbyte_spec"]["image"]
+            self.tag = self.config["airbyte_spec"].get("tag", "latest")
+        except KeyError:
+            raise Exception(
+                "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
+            ) from KeyError
         self._pull_source_image()
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.setup()
 
     @property
     @lru_cache
@@ -481,7 +487,6 @@ class TapAirbyte(Tap):
         return output
 
     def discover_streams(self) -> List[Stream]:
-        self.setup()
         temp_airbyte_catalog: Dict[str, Any] = deepcopy(self.airbyte_catalog)
         output_streams: List[AirbyteStream] = []
         stream: Dict[str, Any]
