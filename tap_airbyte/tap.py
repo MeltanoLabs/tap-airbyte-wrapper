@@ -45,10 +45,10 @@ def write_message(message) -> None:
             orjson.dumps(message.to_dict(), option=orjson.OPT_APPEND_NEWLINE, default=default)
         )
         sys.stdout.buffer.flush()
-    except BrokenPipeError as e:
-        cast(Logger, TapAirbyte.logger).warn("Broken pipe, exiting", exc_info=e)
+    except BrokenPipeError:
+        cast(Logger, TapAirbyte.logger).warn("Broken pipe detected, initiating shutdown")
         if AIRBYTE_JOB:
-            cast(Logger, TapAirbyte.logger).info("Killing Airbyte job")
+            cast(Logger, TapAirbyte.logger).info("Attempting to terminate Airbyte job")
             AIRBYTE_JOB.kill()
         sys.exit(1)
 
