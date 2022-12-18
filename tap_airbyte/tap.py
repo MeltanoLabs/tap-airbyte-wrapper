@@ -104,8 +104,8 @@ class TapAirbyte(Tap):
     conf_dir: str = "/tmp"
 
     # Airbyte image to run
-    _image: str
-    _tag: str
+    _image: Optional[str] = None
+    _tag: Optional[str] = None
 
     # Airbyte -> Demultiplexer -< Singer Streams
     airbyte_producer: Thread
