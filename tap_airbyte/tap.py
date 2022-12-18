@@ -112,7 +112,7 @@ class TapAirbyte(Tap):
     _tag: Optional[str] = None
 
     # Airbyte -> Demultiplexer -< Singer Streams
-    airbyte_producer: Thread
+    airbyte_demuxer: Thread
     singer_consumers: List[Thread] = []
     buffers: Dict[str, Queue] = {}
 
@@ -181,17 +181,6 @@ class TapAirbyte(Tap):
             help="Run the tap in discovery mode.",
         )
         @click.option(
-            "--test",
-            is_flag=False,
-            flag_value=CliTestOptionValue.All.value,
-            default=CliTestOptionValue.Disabled,
-            help=(
-                "Use --test to sync a single record for each stream. "
-                + "Use --test=schema to test schema output without syncing "
-                + "records."
-            ),
-        )
-        @click.option(
             "--catalog",
             help="Use a Singer catalog file with the tap.",
             type=click.Path(),
@@ -209,7 +198,6 @@ class TapAirbyte(Tap):
             version: bool = False,
             about: bool = False,
             discover: bool = False,
-            test: CliTestOptionValue = CliTestOptionValue.Disabled,
             config: tuple[str, ...] = (),
             state: Optional[str] = None,
             catalog: Optional[str] = None,
@@ -268,12 +256,6 @@ class TapAirbyte(Tap):
             )
             if discover:
                 tap.run_discovery()
-                if test == CliTestOptionValue.All.value:
-                    tap.run_connection_test()
-            elif test == CliTestOptionValue.All.value:
-                tap.run_connection_test()
-            elif test == CliTestOptionValue.Schema.value:
-                tap.write_schemas()
             else:
                 tap.sync_all()
 
@@ -407,26 +389,19 @@ class TapAirbyte(Tap):
                 sys.exit(1)
             self.logger.debug(airbyte_message["trace"])
 
-    def sync_one(self, stream: Stream) -> None:
-        stream.sync()
-        stream.finalize_state_progress_markers()
-        stream._write_state_message()
-
     def sync_all(self) -> None:  # type: ignore
-        self.airbyte_producer = Thread(target=self.run_read, daemon=True)
-        self.airbyte_producer.start()
-        self._reset_state_progress_markers()
-        self._set_compatible_replication_methods()
+        self.airbyte_demuxer = Thread(target=self.run_read, daemon=True)
+        self.airbyte_demuxer.start()
         stream: Stream
         for stream in self.streams.values():
             if not stream.selected and not stream.has_selected_descendents:
                 self.logger.info(f"Skipping deselected stream '{stream.name}'.")
                 continue
-            consumer = Thread(target=self.sync_one, args=(stream,), daemon=True)
+            consumer = Thread(target=stream.sync, daemon=True)
             consumer.start()
             self.singer_consumers.append(consumer)
         t1 = time.perf_counter()
-        self.airbyte_producer.join()
+        self.airbyte_demuxer.join()
         for sync in self.singer_consumers:
             sync.join()
         with STDOUT_LOCK:
@@ -435,9 +410,6 @@ class TapAirbyte(Tap):
         for stream in self.streams.values():
             stream.log_sync_costs()
         self.logger.info(f"Synced {len(self.streams)} streams in {t2 - t1:0.2f} seconds.")
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
 
     @property
     def image(self) -> str:
@@ -573,9 +545,9 @@ class AirbyteStream(Stream):
         """Get the buffer for the stream."""
         if not self._buffer:
             while self.name not in self.parent.buffers:
-                if not self.parent.airbyte_producer.is_alive():
+                if not self.parent.airbyte_demuxer.is_alive():
                     self.logger.debug(
-                        f"Airbyte producer died before records were received for stream {self.name}"
+                        f"Airbyte demuxer died before records were received for stream {self.name}"
                     )
                     self._buffer = Queue()
                     break
@@ -587,7 +559,7 @@ class AirbyteStream(Stream):
 
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         """Get records from the stream."""
-        while self.parent.airbyte_producer.is_alive():
+        while self.parent.airbyte_demuxer.is_alive():
             try:
                 # The timeout permits the consumer to re-check the producer is alive
                 yield self.buffer.get(timeout=1)
