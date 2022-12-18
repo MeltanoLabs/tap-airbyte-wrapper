@@ -181,6 +181,11 @@ class TapAirbyte(Tap):
             help="Run the tap in discovery mode.",
         )
         @click.option(
+            "--test",
+            is_flag=True,
+            help="Use --test to run the Airbyte connection test.",
+        )
+        @click.option(
             "--catalog",
             help="Use a Singer catalog file with the tap.",
             type=click.Path(),
@@ -198,6 +203,7 @@ class TapAirbyte(Tap):
             version: bool = False,
             about: bool = False,
             discover: bool = False,
+            test: bool = False,
             config: tuple[str, ...] = (),
             state: Optional[str] = None,
             catalog: Optional[str] = None,
@@ -256,12 +262,16 @@ class TapAirbyte(Tap):
             )
             if discover:
                 tap.run_discovery()
+                if test:
+                    tap.run_connection_test()
+            elif test:
+                tap.run_connection_test()
             else:
                 tap.sync_all()
 
         return cli
 
-    def run_check(self):
+    def run_check(self) -> bool:
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config["connector_config"]))
@@ -291,14 +301,20 @@ class TapAirbyte(Tap):
                 self._process_log_message(message)
             elif message["type"] == AirbyteMessage.CONNECTION_STATUS:
                 if message["connectionStatus"]["status"] == "SUCCEEDED":
-                    self.logger.info("Connection check succeeded")
+                    self.logger.info("Configuration has been verified via the Airbyte check command.")
+                    return True
                 else:
                     self.logger.error(
                         "Connection check failed: %s",
                         message["connectionStatus"]["message"],
                     )
+                    return False
             else:
                 self.logger.warn("Unhandled message: %s", message)
+        raise AirbyteException("Connection check failed")
+
+    def run_connection_test(self) -> bool:  # type: ignore
+        return self.run_check()
 
     def load_state(self, state: dict[str, Any]) -> None:
         super().load_state(state)
