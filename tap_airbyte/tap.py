@@ -47,9 +47,11 @@ def write_message(message) -> None:
         sys.stdout.buffer.flush()
     except BrokenPipeError as e:
         cast(Logger, TapAirbyte.logger).warn("Broken pipe, exiting", exc_info=e)
-        sys.exit(1)
+        if AIRBYTE_JOB:
+            AIRBYTE_JOB.terminate()
 
 
+AIRBYTE_JOB: Optional[subprocess.Popen] = None
 STDOUT_LOCK = Lock()
 singer.write_message = write_message
 
@@ -319,6 +321,7 @@ class TapAirbyte(Tap):
         self.airbyte_state = state
 
     def run_read(self):
+        global AIRBYTE_JOB
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as config, open(
                 f"{tmpdir}/catalog.json", "wb"
@@ -329,7 +332,7 @@ class TapAirbyte(Tap):
                 with open(f"{tmpdir}/state.json", "wb") as state:
                     self.logger.debug("Using state: %s", self.airbyte_state)
                     state.write(orjson.dumps(self.airbyte_state))
-            proc = subprocess.Popen(
+            AIRBYTE_JOB = subprocess.Popen(
                 [
                     "docker",
                     "run",
@@ -348,10 +351,10 @@ class TapAirbyte(Tap):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            atexit.register(proc.kill)
+            atexit.register(AIRBYTE_JOB.kill)
             while True:
-                message = proc.stdout.readline()
-                if not message and proc.poll() is not None:
+                message = AIRBYTE_JOB.stdout.readline()
+                if not message and AIRBYTE_JOB.poll() is not None:
                     break
                 try:
                     airbyte_message = orjson.loads(message)
@@ -384,7 +387,7 @@ class TapAirbyte(Tap):
                     stream_buffer.put_nowait(airbyte_message["record"]["data"])
                 else:
                     self.logger.warn("Unhandled message: %s", airbyte_message)
-            atexit.unregister(proc.kill)
+            atexit.unregister(AIRBYTE_JOB.kill)
 
     def _process_log_message(self, airbyte_message: Dict[str, Any]) -> None:
         if airbyte_message["type"] == AirbyteMessage.LOG:
