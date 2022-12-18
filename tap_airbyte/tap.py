@@ -48,7 +48,9 @@ def write_message(message) -> None:
     except BrokenPipeError as e:
         cast(Logger, TapAirbyte.logger).warn("Broken pipe, exiting", exc_info=e)
         if AIRBYTE_JOB:
-            AIRBYTE_JOB.terminate()
+            cast(Logger, TapAirbyte.logger).info("Killing Airbyte job")
+            AIRBYTE_JOB.kill()
+        sys.exit(1)
 
 
 AIRBYTE_JOB: Optional[subprocess.Popen] = None
