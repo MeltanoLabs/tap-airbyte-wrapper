@@ -7,11 +7,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import lru_cache
+from logging import Logger
 from pathlib import Path, PurePath
 from queue import Empty, Queue
 from tempfile import TemporaryDirectory
 from threading import Lock, Thread
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, cast
 from uuid import UUID
 
 import click
@@ -39,10 +40,14 @@ def default(obj):
 
 
 def write_message(message) -> None:
-    sys.stdout.buffer.write(
-        orjson.dumps(message.to_dict(), option=orjson.OPT_APPEND_NEWLINE, default=default)
-    )
-    sys.stdout.buffer.flush()
+    try:
+        sys.stdout.buffer.write(
+            orjson.dumps(message.to_dict(), option=orjson.OPT_APPEND_NEWLINE, default=default)
+        )
+        sys.stdout.buffer.flush()
+    except BrokenPipeError as e:
+        cast(Logger, TapAirbyte.logger).warn("Broken pipe, exiting", exc_info=e)
+        sys.exit(1)
 
 
 STDOUT_LOCK = Lock()
@@ -388,7 +393,7 @@ class TapAirbyte(Tap):
                         )
                     ),
                 )
-                exit(1)
+                sys.exit(1)
             self.logger.debug(airbyte_message["trace"])
 
     def sync_one(self, stream: Stream) -> None:
