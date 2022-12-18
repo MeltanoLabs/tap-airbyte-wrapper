@@ -427,13 +427,28 @@ class TapAirbyte(Tap):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        try:
-            self.image = self.config["airbyte_spec"]["image"]
-            self.tag = self.config["airbyte_spec"].get("tag", "latest")
-        except KeyError:
-            raise AirbyteException(
-                "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
-            ) from KeyError
+
+    @property
+    def image(self) -> str:
+        if not self._image:
+            try:
+                self._image: str = self.config["airbyte_spec"]["image"]
+            except KeyError:
+                raise AirbyteException(
+                    "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
+                ) from KeyError
+        return self._image
+
+    @property
+    def tag(self) -> str:
+        if not self._tag:
+            try:
+                self._tag: str = cast(dict, self.config["airbyte_spec"]).get("tag", "latest")
+            except KeyError:
+                raise AirbyteException(
+                    "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
+                ) from KeyError
+        return self._tag
 
     @property
     @lru_cache
