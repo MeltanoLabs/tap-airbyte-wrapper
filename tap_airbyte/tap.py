@@ -101,13 +101,19 @@ class TapAirbyte(Tap):
             description="Configuration to pass through to the Airbyte source connector",
         ),
     ).to_dict()
-
     conf_dir: str = "/tmp"
-    buffers: Dict[str, Queue] = {}
-    airbyte_state: Dict[str, Any] = {}
+
+    # Airbyte image to run
+    _image: str
+    _tag: str
+
     # Airbyte -> Demultiplexer -< Singer Streams
     airbyte_producer: Thread
     singer_consumers: List[Thread] = []
+    buffers: Dict[str, Queue] = {}
+
+    # State container
+    airbyte_state: Dict[str, Any] = {}
 
     def run_help(self):
         subprocess.run(
