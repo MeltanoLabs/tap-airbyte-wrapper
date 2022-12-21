@@ -98,7 +98,7 @@ class TapAirbyte(Tap):
             ),
         ),
         th.Property(
-            "connector_config",
+            "airbyte_config",
             th.ObjectType(),
             required=False,
             default={},
@@ -126,12 +126,16 @@ class TapAirbyte(Tap):
         )
 
     def run_spec(self):
-        output = subprocess.run(
+        proc = subprocess.run(
             ["docker", "run", f"{self.image}:{self.tag}", "spec"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        for line in output.stdout.splitlines():
+        if proc.returncode != 0:
+            raise AirbyteException(
+                f"Could not run spec for {self.image}:{self.tag}: {proc.stderr}"
+            )
+        for line in proc.stdout.splitlines():
             try:
                 message = orjson.loads(line)
             except orjson.JSONDecodeError:
@@ -148,7 +152,7 @@ class TapAirbyte(Tap):
     @staticmethod
     def print_spec_as_config(spec: Dict[str, Any]) -> None:
         print("\nSetup Instructions:\n")
-        print("connector_config:")
+        print("airbyte_config:")
         for prop, schema in spec["properties"].items():
             if "description" in schema:
                 print(f"  # {schema['description']}")
@@ -248,7 +252,7 @@ class TapAirbyte(Tap):
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
                     )
                     spec = tap.run_spec()["connectionSpecification"]
-                    TapAirbyte.config_jsonschema["properties"]["connector_config"] = spec
+                    TapAirbyte.config_jsonschema["properties"]["airbyte_config"] = spec
                     TapAirbyte.print_about(format=format)
                     TapAirbyte.print_spec_as_config(spec)
                 return
@@ -274,8 +278,8 @@ class TapAirbyte(Tap):
     def run_check(self) -> bool:
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as f:
-                f.write(orjson.dumps(self.config["connector_config"]))
-            output = subprocess.run(
+                f.write(orjson.dumps(self.config["airbyte_config"]))
+            proc = subprocess.run(
                 [
                     "docker",
                     "run",
@@ -291,7 +295,11 @@ class TapAirbyte(Tap):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-        for line in output.stdout.splitlines():
+        if proc.returncode != 0:
+            raise AirbyteException(
+                f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
+            )
+        for line in proc.stdout.splitlines():
             try:
                 message = orjson.loads(line)
             except orjson.JSONDecodeError:
@@ -326,7 +334,7 @@ class TapAirbyte(Tap):
             with open(f"{tmpdir}/config.json", "wb") as config, open(
                 f"{tmpdir}/catalog.json", "wb"
             ) as catalog:
-                config.write(orjson.dumps(self.config.get("connector_config", {})))
+                config.write(orjson.dumps(self.config.get("airbyte_config", {})))
                 catalog.write(orjson.dumps(self.configured_airbyte_catalog))
             if self.airbyte_state:
                 with open(f"{tmpdir}/state.json", "wb") as state:
@@ -420,6 +428,10 @@ class TapAirbyte(Tap):
         self.airbyte_demuxer.join()
         for sync in self.singer_consumers:
             sync.join()
+        if AIRBYTE_JOB and AIRBYTE_JOB.returncode != 0:
+            raise AirbyteException(
+                f"Airbyte process failed with return code {AIRBYTE_JOB.returncode}: {AIRBYTE_JOB.stderr.read()}"
+            )
         with STDOUT_LOCK:
             singer.write_message(singer.StateMessage(self.airbyte_state))
         t2 = time.perf_counter()
@@ -454,7 +466,7 @@ class TapAirbyte(Tap):
     def airbyte_catalog(self):
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as f:
-                f.write(orjson.dumps(self.config["connector_config"]))
+                f.write(orjson.dumps(self.config["airbyte_config"]))
             discover = subprocess.run(
                 [
                     "docker",

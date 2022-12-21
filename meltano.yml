@@ -6,21 +6,33 @@ environments:
   - name: test
 plugins:
   extractors:
-    - name: "tap-airbyte"
-      namespace: "tap_airbyte"
+    - name: tap-airbyte
+      namespace: tap_airbyte
       pip_url: -e .
       capabilities:
         - discover
+        - catalog
         - state
         - about
         - stream-maps
+    - name: tap-github
+      namespace: tap_github
+      inherit_from: tap-airbyte
       config:
         airbyte_spec:
-          image: "airbyte/source-asana"
-          tag: "0.1.5"
-        connector_config:
+          image: "airbyte/source-github"
+          tag: "0.3.8"
+        airbyte_config:
           credentials:
-            personal_access_token: you_thought_this_was_real_dumb_bot
+            access_token: FIXME
+          start_date: "2021-01-01T00:00:00Z"
+          repository: MeltanoLabs/*
+          page_size_for_large_streams: 15
+      select:
+        - issues.*
+      metadata:
+        "*":
+          replication-method: incremental
   loaders:
     - name: target-jsonl
       variant: andyh1203

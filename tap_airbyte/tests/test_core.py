@@ -1,16 +1,22 @@
 """Tests standard tap features using the built-in SDK tests library."""
+import os
 
 from singer_sdk.testing import get_standard_tap_tests
 
 from tap_airbyte.tap import TapAirbyte
 
 SAMPLE_CONFIG = {
-    "_image": "airbyte/source-asana",
-    "_tag": "0.1.5",
-    "connector_config": {
+    "airbyte_spec":{
+        "image": "airbyte/source-github",
+        "tag": "0.3.8"
+    },
+    "airbyte_config": {
         "credentials": {
-            "personal_access_token": "1/1201980351759625:77e6c03195c3788a36f0f8c139527ee7",
+            "access_token": os.environ["ACCESS_TOKEN"],
         },
+        "start_date": "2021-01-01T00:00:00Z",
+        "repository": "z3z1ma/tap-airbyte",
+        "page_size_for_large_streams": 20,
     },
 }
 
@@ -23,4 +29,5 @@ def test_standard_tap_tests():
         test()
 
 
-test_standard_tap_tests()
+if __name__ == "__main__":
+    test_standard_tap_tests()
