@@ -324,7 +324,7 @@ class TapAirbyte(Tap):
     def run_connection_test(self) -> bool:  # type: ignore
         return self.run_check()
 
-    def load_state(self, state: dict[str, Any]) -> None:
+    def load_state(self, state: Dict[str, Any]) -> None:
         super().load_state(state)
         self.airbyte_state = state
 
