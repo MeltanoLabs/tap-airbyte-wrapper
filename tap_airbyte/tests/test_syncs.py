@@ -64,10 +64,10 @@ def test_weather_sync():
                     parsed_baseline["type"] == "RECORD"
                 ), f"Parsed message at line {no} is not a record but the test input is"
                 parsed_baseline.pop("time_extracted", None)
-                parsed_baseline.pop("time_extracted", None)
+                parsed_test_case.pop("time_extracted", None)
                 assert (
-                    parsed_baseline == parsed_baseline
-                ), f"{no}: {parsed_baseline} != {parsed_baseline}"
+                    parsed_baseline == parsed_test_case
+                ), f"{no}: {parsed_baseline} != {parsed_test_case}"
         except json.JSONDecodeError:
             pass
 
@@ -111,10 +111,10 @@ def test_poke_sync():
                     parsed_baseline["type"] == "RECORD"
                 ), f"Parsed message at line {no} is not a record but the test input is"
                 parsed_baseline.pop("time_extracted", None)
-                parsed_baseline.pop("time_extracted", None)
+                parsed_test_case.pop("time_extracted", None)
                 assert (
-                    parsed_baseline == parsed_baseline
-                ), f"{no}: {parsed_baseline} != {parsed_baseline}"
+                    parsed_baseline == parsed_test_case
+                ), f"{no}: {parsed_baseline} != {parsed_test_case}"
         except json.JSONDecodeError:
             pass
 
@@ -154,10 +154,10 @@ def test_pub_apis_sync():
                     parsed_baseline["type"] == "RECORD"
                 ), f"Parsed message at line {no} is not a record but the test input is"
                 parsed_baseline.pop("time_extracted", None)
-                parsed_baseline.pop("time_extracted", None)
+                parsed_test_case.pop("time_extracted", None)
                 assert (
-                    parsed_baseline == parsed_baseline
-                ), f"{no}: {parsed_baseline} != {parsed_baseline}"
+                    parsed_baseline == parsed_test_case
+                ), f"{no}: {parsed_baseline} != {parsed_test_case}"
         except json.JSONDecodeError:
             pass
 
