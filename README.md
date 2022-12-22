@@ -83,6 +83,8 @@ poetry install
 
 ### Create and Run Tests 🧪
 
+⚠️ If running the existing tests, first add a .env file with a key `ACCESS_TOKEN=gh token here` 
+
 Create tests within the `tap_airbyte/tests` subfolder and
   then run:
 
