@@ -1,5 +1,3 @@
-# tap-airbyte
-
 <h2 align="center">Tap-Airbyte-Wrapper</h2>
 
 <p align="center">
@@ -8,11 +6,11 @@
 <a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
 </p>
 
-`tap-airbyte` is a Singer tap that wraps *all* Airbyte sources implicitly.
+`tap-airbyte` is a Singer tap that wraps *all* Airbyte sources implicitly. This adds over 250 immediately usable extractors to the broader Singer ecosystem. This opens up high quality connectors for an expanded audience further democratizing ELT and encourages contributions upstream where system experts using an airbyte source via this wrapper may be inclined to contribute to the connector source, open issues, etc if it is the better option than what's available in the Singer catalog alone.
 
 Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
 
-## Configuration
+## Configuration 📝
 
 | Setting             | Required | Default | Description |
 |:--------------------|:--------:|:-------:|:------------|
@@ -24,19 +22,21 @@ Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
 | flattening_max_depth| False    | None    | The max depth to flatten schemas. |
 
 
-### Configure using environment variables
+### Configure using environment variables ✏️
 
 This Singer tap will automatically import any environment variables within the working directory's
 `.env` if the `--config=ENV` is provided, such that config values will be considered if a matching
 environment variable is set either in the terminal context or in the `.env` file.
 
-### Source Authentication and Authorization
+### Source Authentication and Authorization 👮🏽‍♂️
 
-After configuring a tap like this:
+First, configure your tap by creating a configuration json file. In this example we will call it `github.json` since this tap may use many configurations for different sources.
+
+> 🙇🏾‍♂️ This is an example to show `airbyte_spec` and `airbyte_config`, it does _not_ represent a complete [source-github](https://docs.airbyte.com/integrations/sources/github) config
+
+> ❗️ Remember the required keys for `airbyte_config` can be dumped to stdout by running --about **with** --config /path/to/FILE where FILE minimally contains just the airbyte_spec/image value
 
 ```json
-// This is an example to show airbyte_spec and airbyte_config, it does not represent a complete source-github config
-// Remember the required keys for airbyte_config can be gleaned by running --about with --config /path/to/FILE where FILE minimally contains just the airbyte_spec/image value
 {
   "airbyte_spec": {
     "image": "source-github"
@@ -58,11 +58,11 @@ tap-airbyte --config ./github.json --test
 
 Where `github.json` represents the above config (can be any airbyte source and any file name). The `--test` flag will validate your configuration as being able to access the configured data source! With meltano, configuration is implicitly passed based on what's in your meltano.yml configuration which simplifies it to just `meltano invoke tap-airbyte --test`
 
-## Usage
+## Usage 👷‍♀️
 
 You can easily run `tap-airbyte` by itself or in a pipeline using [Meltano](https://meltano.com/).
 
-### Executing the Tap Directly
+### Executing the Tap Directly 🔨
 
 ```bash
 tap-airbyte --version
@@ -70,7 +70,7 @@ tap-airbyte --help
 tap-airbyte --config CONFIG --discover > ./catalog.json
 ```
 
-## Developer Resources
+## Developer Resources 👩🏼‍💻
 
 Follow these instructions to contribute to this project.
 
@@ -81,7 +81,7 @@ pipx install poetry
 poetry install
 ```
 
-### Create and Run Tests
+### Create and Run Tests 🧪
 
 Create tests within the `tap_airbyte/tests` subfolder and
   then run:

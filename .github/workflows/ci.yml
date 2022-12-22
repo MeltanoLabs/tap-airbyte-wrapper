@@ -1,4 +1,4 @@
-name: Tap Tests
+name: Tests
 
 on:
   pull_request:
@@ -32,13 +32,13 @@ jobs:
         python-version: ${{ matrix.py_version }}
     - name: Install Tap Airbyte Wrapper
       run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install .
+        python -m pip install --upgrade pip poetry
+        poetry install
     - name: Run SDK Tests
       run: |
-        pytest tap_airbyte/tests/test_core.py
+        poetry run pytest tap_airbyte/tests/test_core.py
       env:
         ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
     - name: Run airbyte/source-file Sync Test
       run: |
-        pytest tap_airbyte/tests/test_sync.py
+        poetry run pytest tap_airbyte/tests/test_sync.py
