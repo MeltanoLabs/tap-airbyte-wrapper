@@ -32,10 +32,13 @@ jobs:
         python-version: ${{ matrix.py_version }}
     - name: Install Tap Airbyte Wrapper
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip wheel setuptools
         pip install .
     - name: Run SDK Tests
       run: |
-        python tap_airbyte/tests/test_core.py
+        pytest tap_airbyte/tests/test_core.py
       env:
         ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+    - name: Run airbyte/source-file Sync Test
+      run: |
+        pytest tap_airbyte/tests/test_sync.py

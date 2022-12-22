@@ -1,49 +1,28 @@
 # tap-airbyte
 
+<h2 align="center">Tap-Airbyte-Wrapper</h2>
+
+<p align="center">
+<a href="https://github.com/z3z1ma/tap-airbyte/actions/"><img alt="Actions Status" src="https://github.com/z3z1ma/tap-airbyte/actions/workflows/ci.yml/badge.svg"></a>
+<a href="https://github.com/z3z1ma/tap-airbyte/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg"></a>
+<a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
+</p>
+
 `tap-airbyte` is a Singer tap that wraps *all* Airbyte sources implicitly.
 
 Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
 
-<!--
-
-Developer TODO: Update the below as needed to correctly describe the install procedure. For instance, if you do not have a PyPi repo, or if you want users to directly install from your git repo, you can modify this step as appropriate.
-
-## Installation
-
-Install from PyPi:
-
-```bash
-pipx install tap-airbyte
-```
-
-Install from GitHub:
-
-```bash
-pipx install git+https://github.com/ORG_NAME/tap-airbyte.git@main
-```
-
--->
-
 ## Configuration
 
-### Accepted Config Options
+| Setting             | Required | Default | Description |
+|:--------------------|:--------:|:-------:|:------------|
+| airbyte_spec        | True     | None    | Specification for the Airbyte source connector. This is a JSON object minimally containing the `image` key. The `tag` key is optional and defaults to `latest`. |
+| airbyte_config      | False    | None    | Configuration to pass through to the Airbyte source connector, this can be gleaned by running the the tap with the `--about` flag and the `--config` flag pointing to a file containing the `airbyte_spec` configuration. This is a JSON object. |
+| stream_maps         | False    | None    | Config object for stream maps capability. For more information check out [Stream Maps](https://sdk.meltano.com/en/latest/stream_maps.html). |
+| stream_map_config   | False    | None    | User-defined config values to be used within map expressions. |
+| flattening_enabled  | False    | None    | 'True' to enable schema flattening and automatically expand nested properties. |
+| flattening_max_depth| False    | None    | The max depth to flatten schemas. |
 
-<!--
-Developer TODO: Provide a list of config options accepted by the tap.
-
-This section can be created by copy-pasting the CLI output from:
-
-```
-tap-airbyte --about --format=markdown
-```
--->
-
-A full list of supported settings and capabilities for this
-tap is available by running:
-
-```bash
-tap-airbyte --about
-```
 
 ### Configure using environment variables
 
@@ -53,9 +32,31 @@ environment variable is set either in the terminal context or in the `.env` file
 
 ### Source Authentication and Authorization
 
-<!--
-Developer TODO: If your tap requires special access on the source system, or any special authentication requirements, provide those here.
--->
+After configuring a tap like this:
+
+```json
+// This is an example to show airbyte_spec and airbyte_config, it does not represent a complete source-github config
+// Remember the required keys for airbyte_config can be gleaned by running --about with --config /path/to/FILE where FILE minimally contains just the airbyte_spec/image value
+{
+  "airbyte_spec": {
+    "image": "source-github"
+  },
+  "airbyte_config": {
+    "credentials": {
+      "access_token": "..."
+    },
+    "repositories": "z3z1ma/*",
+  }
+}
+```
+
+Run the built in Airbyte connection test to validate your configuration like this:
+
+```bash
+tap-airbyte --config ./github.json --test
+```
+
+Where `github.json` represents the above config (can be any airbyte source and any file name). The `--test` flag will validate your configuration as being able to access the configured data source! With meltano, configuration is implicitly passed based on what's in your meltano.yml configuration which simplifies it to just `meltano invoke tap-airbyte --test`
 
 ## Usage
 

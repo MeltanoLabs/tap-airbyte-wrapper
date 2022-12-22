@@ -1,4 +1,15 @@
-"""Airbyte tap class."""
+# Copyright (c) 2022 Alex Butler
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+# to whom the Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies or
+# substantial portions of the Software.
+"""Airbyte tap class"""
+
 import atexit
 import subprocess
 import sys
@@ -42,15 +53,15 @@ def default(obj):
 def write_message(message) -> None:
     try:
         sys.stdout.buffer.write(
-            orjson.dumps(message.to_dict(), option=orjson.OPT_APPEND_NEWLINE, default=default)
+            orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
         )
         sys.stdout.buffer.flush()
     except BrokenPipeError:
-        cast(Logger, TapAirbyte.logger).warn("Broken pipe detected, initiating shutdown")
+        cast(Logger, TapAirbyte.logger).warning("Broken pipe detected, initiating shutdown")
         if AIRBYTE_JOB:
             cast(Logger, TapAirbyte.logger).info("Attempting to terminate Airbyte job")
             AIRBYTE_JOB.kill()
-        sys.exit(1)
+        raise
 
 
 AIRBYTE_JOB: Optional[subprocess.Popen] = None
@@ -96,13 +107,21 @@ class TapAirbyte(Tap):
                 ),
                 th.Property("tag", th.StringType, required=False, default="latest"),
             ),
+            required=True,
+            description=(
+                "Specification for the Airbyte source connector. This is a JSON object minimally containing "
+                "the `image` key. The `tag` key is optional and defaults to `latest`."
+            ),
         ),
         th.Property(
             "airbyte_config",
             th.ObjectType(),
             required=False,
-            default={},
-            description="Configuration to pass through to the Airbyte source connector",
+            description=(
+                "Configuration to pass through to the Airbyte source connector, this can be gleaned "
+                "by running the the tap with the `--about` flag and the `--config` flag pointing to "
+                "a file containing the `airbyte_spec` configuration. This is a JSON object."
+            ),
         ),
     ).to_dict()
     conf_dir: str = "/tmp"
@@ -119,59 +138,7 @@ class TapAirbyte(Tap):
     # State container
     airbyte_state: Dict[str, Any] = {}
 
-    def run_help(self):
-        subprocess.run(
-            ["docker", "run", f"{self.image}:{self.tag}", "--help"],
-            check=True,
-        )
-
-    def run_spec(self):
-        proc = subprocess.run(
-            ["docker", "run", f"{self.image}:{self.tag}", "spec"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if proc.returncode != 0:
-            raise AirbyteException(
-                f"Could not run spec for {self.image}:{self.tag}: {proc.stderr}"
-            )
-        for line in proc.stdout.splitlines():
-            try:
-                message = orjson.loads(line)
-            except orjson.JSONDecodeError:
-                self.logger.warn("Could not parse message: %s", line)
-                continue
-            if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
-                self._process_log_message(message)
-            elif message["type"] == AirbyteMessage.SPEC:
-                return message["spec"]
-            else:
-                self.logger.warn("Unhandled message: %s", message)
-        raise AirbyteException("No spec found")
-
-    @staticmethod
-    def print_spec_as_config(spec: Dict[str, Any]) -> None:
-        print("\nSetup Instructions:\n")
-        print("airbyte_config:")
-        for prop, schema in spec["properties"].items():
-            if "description" in schema:
-                print(f"  # {schema['description']}")
-            print(f"  {prop}: {'fixme' if schema['type'] != 'object' else ''}")
-            if schema["type"] == "object":
-                if "oneOf" in schema:
-                    for i, one_of in enumerate(schema["oneOf"]):
-                        print(f"    # Option {i + 1}")
-                        for inner_prop, inner_schema in one_of["properties"].items():
-                            if inner_prop == "option_title":
-                                continue
-                            if "description" in inner_schema:
-                                print(f"    # {inner_schema['description']}")
-                            print(f"    {inner_prop}: fixme")
-                else:
-                    for inner_prop, inner_schema in schema["properties"].items():
-                        if "description" in inner_schema:
-                            print(f"    # {inner_schema['description']}")
-                        print(f"    {inner_prop}: fixme")
+    ORJSON_OPTS = orjson.OPT_APPEND_NEWLINE
 
     @classproperty
     def cli(cls) -> Callable:
@@ -244,6 +211,7 @@ class TapAirbyte(Tap):
                         parse_env_config=parse_env_config,
                         validate_config=validate_config,
                     )
+                    spec = tap.run_spec()["connectionSpecification"]
                 except Exception:
                     cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
                     cls.print_about(format=format)
@@ -251,7 +219,6 @@ class TapAirbyte(Tap):
                     cls.logger.info(
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
                     )
-                    spec = tap.run_spec()["connectionSpecification"]
                     TapAirbyte.config_jsonschema["properties"]["airbyte_config"] = spec
                     TapAirbyte.print_about(format=format)
                     TapAirbyte.print_spec_as_config(spec)
@@ -275,10 +242,63 @@ class TapAirbyte(Tap):
 
         return cli
 
+    def run_help(self):
+        subprocess.run(
+            ["docker", "run", f"{self.image}:{self.tag}", "--help"],
+            check=True,
+        )
+
+    def run_spec(self):
+        proc = subprocess.run(
+            ["docker", "run", f"{self.image}:{self.tag}", "spec"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            raise AirbyteException(f"Could not run spec for {self.image}:{self.tag}: {proc.stderr}")
+        for line in proc.stdout.splitlines():
+            try:
+                message = orjson.loads(line)
+            except orjson.JSONDecodeError:
+                if line:
+                    self.logger.warning("Could not parse message: %s", line)
+                continue
+            if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
+                self._process_log_message(message)
+            elif message["type"] == AirbyteMessage.SPEC:
+                return message["spec"]
+            else:
+                self.logger.warning("Unhandled message: %s", message)
+        raise AirbyteException("No spec found")
+
+    @staticmethod
+    def print_spec_as_config(spec: Dict[str, Any]) -> None:
+        print("\nSetup Instructions:\n")
+        print("airbyte_config:")
+        for prop, schema in spec["properties"].items():
+            if "description" in schema:
+                print(f"  # {schema['description']}")
+            print(f"  {prop}: {'fixme' if schema['type'] != 'object' else ''}")
+            if schema["type"] == "object":
+                if "oneOf" in schema:
+                    for i, one_of in enumerate(schema["oneOf"]):
+                        print(f"    # Option {i + 1}")
+                        for inner_prop, inner_schema in one_of["properties"].items():
+                            if inner_prop == "option_title":
+                                continue
+                            if "description" in inner_schema:
+                                print(f"    # {inner_schema['description']}")
+                            print(f"    {inner_prop}: fixme")
+                else:
+                    for inner_prop, inner_schema in schema["properties"].items():
+                        if "description" in inner_schema:
+                            print(f"    # {inner_schema['description']}")
+                        print(f"    {inner_prop}: fixme")
+
     def run_check(self) -> bool:
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as f:
-                f.write(orjson.dumps(self.config["airbyte_config"]))
+                f.write(orjson.dumps(self.config.get("airbyte_config", {})))
             proc = subprocess.run(
                 [
                     "docker",
@@ -303,13 +323,16 @@ class TapAirbyte(Tap):
             try:
                 message = orjson.loads(line)
             except orjson.JSONDecodeError:
-                self.logger.warn("Could not parse message: %s", line)
+                if line:
+                    self.logger.warning("Could not parse message: %s", line)
                 continue
             if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
                 self._process_log_message(message)
             elif message["type"] == AirbyteMessage.CONNECTION_STATUS:
                 if message["connectionStatus"]["status"] == "SUCCEEDED":
-                    self.logger.info("Configuration has been verified via the Airbyte check command.")
+                    self.logger.info(
+                        "Configuration has been verified via the Airbyte check command."
+                    )
                     return True
                 else:
                     self.logger.error(
@@ -318,15 +341,11 @@ class TapAirbyte(Tap):
                     )
                     return False
             else:
-                self.logger.warn("Unhandled message: %s", message)
+                self.logger.warning("Unhandled message: %s", message)
         raise AirbyteException("Connection check failed")
 
     def run_connection_test(self) -> bool:  # type: ignore
         return self.run_check()
-
-    def load_state(self, state: Dict[str, Any]) -> None:
-        super().load_state(state)
-        self.airbyte_state = state
 
     def run_read(self):
         global AIRBYTE_JOB
@@ -367,7 +386,8 @@ class TapAirbyte(Tap):
                 try:
                     airbyte_message = orjson.loads(message)
                 except orjson.JSONDecodeError:
-                    self.logger.warn("Could not parse message: %s", message)
+                    if message:
+                        self.logger.warning("Could not parse message: %s", message)
                     continue
                 if airbyte_message["type"] in (
                     AirbyteMessage.LOG,
@@ -394,7 +414,7 @@ class TapAirbyte(Tap):
                     )
                     stream_buffer.put_nowait(airbyte_message["record"]["data"])
                 else:
-                    self.logger.warn("Unhandled message: %s", airbyte_message)
+                    self.logger.warning("Unhandled message: %s", airbyte_message)
             atexit.unregister(AIRBYTE_JOB.kill)
 
     def _process_log_message(self, airbyte_message: Dict[str, Any]) -> None:
@@ -412,32 +432,6 @@ class TapAirbyte(Tap):
                 )
                 sys.exit(1)
             self.logger.debug(airbyte_message["trace"])
-
-    def sync_all(self) -> None:  # type: ignore
-        self.airbyte_demuxer = Thread(target=self.run_read, daemon=True)
-        self.airbyte_demuxer.start()
-        stream: Stream
-        for stream in self.streams.values():
-            if not stream.selected and not stream.has_selected_descendents:
-                self.logger.info(f"Skipping deselected stream '{stream.name}'.")
-                continue
-            consumer = Thread(target=stream.sync, daemon=True)
-            consumer.start()
-            self.singer_consumers.append(consumer)
-        t1 = time.perf_counter()
-        self.airbyte_demuxer.join()
-        for sync in self.singer_consumers:
-            sync.join()
-        if AIRBYTE_JOB and AIRBYTE_JOB.returncode != 0:
-            raise AirbyteException(
-                f"Airbyte process failed with return code {AIRBYTE_JOB.returncode}: {AIRBYTE_JOB.stderr.read()}"
-            )
-        with STDOUT_LOCK:
-            singer.write_message(singer.StateMessage(self.airbyte_state))
-        t2 = time.perf_counter()
-        for stream in self.streams.values():
-            stream.log_sync_costs()
-        self.logger.info(f"Synced {len(self.streams)} streams in {t2 - t1:0.2f} seconds.")
 
     @property
     def image(self) -> str:
@@ -466,7 +460,7 @@ class TapAirbyte(Tap):
     def airbyte_catalog(self):
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as f:
-                f.write(orjson.dumps(self.config["airbyte_config"]))
+                f.write(orjson.dumps(self.config.get("airbyte_config", {})))
             discover = subprocess.run(
                 [
                     "docker",
@@ -519,6 +513,36 @@ class TapAirbyte(Tap):
                 }
             )
         return output
+
+    def load_state(self, state: Dict[str, Any]) -> None:
+        super().load_state(state)
+        self.airbyte_state = state
+
+    def sync_all(self) -> None:  # type: ignore
+        self.airbyte_demuxer = Thread(target=self.run_read, daemon=True)
+        self.airbyte_demuxer.start()
+        stream: Stream
+        for stream in self.streams.values():
+            if not stream.selected and not stream.has_selected_descendents:
+                self.logger.info(f"Skipping deselected stream '{stream.name}'.")
+                continue
+            consumer = Thread(target=stream.sync, daemon=True)
+            consumer.start()
+            self.singer_consumers.append(consumer)
+        t1 = time.perf_counter()
+        self.airbyte_demuxer.join()
+        for sync in self.singer_consumers:
+            sync.join()
+        if AIRBYTE_JOB and AIRBYTE_JOB.returncode != 0:
+            raise AirbyteException(
+                f"Airbyte process failed with return code {AIRBYTE_JOB.returncode}: {AIRBYTE_JOB.stderr.read()}"
+            )
+        with STDOUT_LOCK:
+            singer.write_message(singer.StateMessage(self.airbyte_state))
+        t2 = time.perf_counter()
+        for stream in self.streams.values():
+            stream.log_sync_costs()
+        self.logger.info(f"Synced {len(self.streams)} streams in {t2 - t1:0.2f} seconds.")
 
     def discover_streams(self) -> List[Stream]:
         output_streams: List[AirbyteStream] = []
