@@ -50,13 +50,15 @@ First, configure your tap by creating a configuration json file. In this example
 }
 ```
 
-Run the built in Airbyte connection test to validate your configuration like this:
+Run the built in Airbyte connection test to validate your configuration like this where `github.json` represents the above config (note the choice of file name is purely for illustration):
 
 ```bash
 tap-airbyte --config ./github.json --test
 ```
 
-Where `github.json` represents the above config (can be any airbyte source and any file name). The `--test` flag will validate your configuration as being able to access the configured data source! With meltano, configuration is implicitly passed based on what's in your meltano.yml configuration which simplifies it to just `meltano invoke tap-airbyte --test`
+The `--test` flag will **validate your configuration** as being able to access the configured data source! Be sure to use it. With meltano, configuration is implicitly passed based on what's in your meltano.yml configuration which simplifies it to just `meltano invoke tap-airbyte --test`
+
+See more configuration examples in the [sync tests](tap_airbyte/tests/test_syncs.py)
 
 ## Usage 👷‍♀️
 
@@ -83,8 +85,6 @@ poetry install
 
 ### Create and Run Tests 🧪
 
-⚠️ If running the existing tests, first add a .env file with a key `ACCESS_TOKEN=gh token here` 
-
 Create tests within the `tap_airbyte/tests` subfolder and
   then run:
 
@@ -103,11 +103,6 @@ poetry run tap-airbyte --help
 _**Note:** This tap will work in any Singer environment and does not require Meltano.
 Examples here are for convenience and to streamline end-to-end orchestration scenarios._
 
-<!--
-Developer TODO:
-Your project comes with a custom `meltano.yml` project file already created. Open the `meltano.yml` and follow any "TODO" items listed in
-the file.
--->
 
 Next, install Meltano (if you haven't already) and any needed plugins:
 

@@ -23,14 +23,9 @@ def test_standard_tap_tests():
     tests = get_standard_tap_tests(
         TapAirbyte,
         config={
-            "airbyte_spec": {"image": "airbyte/source-github", "tag": "0.3.8"},
+            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.1.5"},
             "airbyte_config": {
-                "credentials": {
-                    "access_token": os.getenv("ACCESS_TOKEN", "dummy"),
-                },
-                "start_date": "2021-01-01T00:00:00Z",
-                "repository": "z3z1ma/tap-airbyte",
-                "page_size_for_large_streams": 20,
+                "pokemon_name": "infernape",
             },
         },
     )

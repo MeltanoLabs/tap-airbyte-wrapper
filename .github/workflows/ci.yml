@@ -36,9 +36,7 @@ jobs:
         poetry install
     - name: Run SDK Tests
       run: |
-        poetry run pytest tap_airbyte/tests/test_core.py
-      env:
-        ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-    - name: Run airbyte/source-file Sync Test
+        poetry run pytest -k test_core
+    - name: Run Airbyte Sync Tests
       run: |
-        poetry run pytest tap_airbyte/tests/test_sync.py
+        poetry run pytest -k test_syncs
