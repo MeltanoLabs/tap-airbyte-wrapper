@@ -254,8 +254,6 @@ class TapAirbyte(Tap):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        if proc.returncode != 0:
-            raise AirbyteException(f"Could not run spec for {self.image}:{self.tag}: {proc.stderr}")
         for line in proc.stdout.splitlines():
             try:
                 message = orjson.loads(line)
@@ -269,6 +267,8 @@ class TapAirbyte(Tap):
                 return message["spec"]
             else:
                 self.logger.warning("Unhandled message: %s", message)
+        if proc.returncode != 0:
+            raise AirbyteException(f"Could not run spec for {self.image}:{self.tag}: {proc.stderr}")
         raise AirbyteException("No spec found")
 
     @staticmethod
@@ -315,10 +315,6 @@ class TapAirbyte(Tap):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-        if proc.returncode != 0:
-            raise AirbyteException(
-                f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
-            )
         for line in proc.stdout.splitlines():
             try:
                 message = orjson.loads(line)
@@ -342,7 +338,11 @@ class TapAirbyte(Tap):
                     return False
             else:
                 self.logger.warning("Unhandled message: %s", message)
-        raise AirbyteException("Connection check failed")
+        if proc.returncode != 0:
+            raise AirbyteException(
+                f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
+            )
+        raise AirbyteException("No connection status found")
 
     def run_connection_test(self) -> bool:  # type: ignore
         return self.run_check()
@@ -389,7 +389,13 @@ class TapAirbyte(Tap):
                     if message:
                         self.logger.warning("Could not parse message: %s", message)
                     continue
-                if airbyte_message["type"] in (
+                if airbyte_message["type"] == AirbyteMessage.RECORD:
+                    stream_buffer: Queue = self.buffers.setdefault(
+                        airbyte_message["record"]["stream"],
+                        Queue(),
+                    )
+                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
+                elif airbyte_message["type"] in (
                     AirbyteMessage.LOG,
                     AirbyteMessage.TRACE,
                 ):
@@ -407,12 +413,6 @@ class TapAirbyte(Tap):
                     self.airbyte_state = unpacked_state
                     with STDOUT_LOCK:
                         singer.write_message(singer.StateMessage(self.airbyte_state))
-                elif airbyte_message["type"] == AirbyteMessage.RECORD:
-                    stream_buffer: Queue = self.buffers.setdefault(
-                        airbyte_message["record"]["stream"],
-                        Queue(),
-                    )
-                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
             atexit.unregister(AIRBYTE_JOB.kill)
