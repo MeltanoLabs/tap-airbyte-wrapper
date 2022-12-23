@@ -498,7 +498,7 @@ class TapAirbyte(Tap):
                 return airbyte_message["catalog"]
         if proc.returncode != 0:
             raise AirbyteException(
-                f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
+                f"Discover failed with return code {proc.returncode}: {proc.stderr.decode()}"
             )
         raise AirbyteException(
             "Could not discover catalog, no catalog message received. \n"
