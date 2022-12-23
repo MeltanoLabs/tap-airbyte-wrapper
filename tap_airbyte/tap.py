@@ -148,8 +148,10 @@ class TapAirbyte(Tap):
                 )
             ),
             required=False,
-            default=[],
-            description="Docker mounts to make available to the Airbyte container",
+            description=(
+                "Docker mounts to make available to the Airbyte container. Expects a list of maps "
+                "containing source, target, and type as is documented in the docker --mount documentation"
+            ),
         ),
     ).to_dict()
     conf_dir: str = "/tmp"
