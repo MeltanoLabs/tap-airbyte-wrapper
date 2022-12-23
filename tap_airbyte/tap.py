@@ -123,12 +123,41 @@ class TapAirbyte(Tap):
                 "a file containing the `airbyte_spec` configuration. This is a JSON object."
             ),
         ),
+        th.Property(
+            "docker_mounts",
+            th.ArrayType(
+                th.ObjectType(
+                    th.Property(
+                        "source",
+                        th.StringType,
+                        required=True,
+                        description="Source path to mount",
+                    ),
+                    th.Property(
+                        "target",
+                        th.StringType,
+                        required=True,
+                        description="Target path to mount",
+                    ),
+                    th.Property(
+                        "type",
+                        th.StringType,
+                        default="bind",
+                        description="Type of mount",
+                    ),
+                )
+            ),
+            required=False,
+            default=[],
+            description="Docker mounts to make available to the Airbyte container",
+        ),
     ).to_dict()
     conf_dir: str = "/tmp"
 
     # Airbyte image to run
     _image: Optional[str] = None
     _tag: Optional[str] = None
+    _docker_mounts: Optional[List[Dict[str, str]]] = None
 
     # Airbyte -> Demultiplexer -< Singer Streams
     airbyte_demuxer: Thread
@@ -311,6 +340,9 @@ class TapAirbyte(Tap):
                     "-i",
                     "-v",
                     f"{tmpdir}:{self.conf_dir}",
+                ]
+                + self.docker_mounts
+                + [
                     f"{self.image}:{self.tag}",
                     "check",
                     "--config",
@@ -375,6 +407,9 @@ class TapAirbyte(Tap):
                     "-i",
                     "-v",
                     f"{tmpdir}:{self.conf_dir}",
+                ]
+                + self.docker_mounts
+                + [
                     f"{self.image}:{self.tag}",
                     "read",
                     "--config",
@@ -466,6 +501,22 @@ class TapAirbyte(Tap):
         return self._tag
 
     @property
+    def docker_mounts(self) -> List[str]:
+        if not self._docker_mounts:
+            configured_mounts = []
+            mounts = self.config.get("docker_mounts", [])
+            mount: Dict[str, str]
+            for mount in mounts:
+                configured_mounts.extend(
+                    [
+                        "--mount",
+                        f"source={mount['source']},target={mount['target']},type={mount.get('type', 'bind')}",
+                    ]
+                )
+            self._docker_mounts: List[str] = configured_mounts
+        return self._docker_mounts
+
+    @property
     @lru_cache
     def airbyte_catalog(self):
         with TemporaryDirectory() as tmpdir:
@@ -479,6 +530,9 @@ class TapAirbyte(Tap):
                     "-i",
                     "-v",
                     f"{tmpdir}:{self.conf_dir}",
+                ]
+                + self.docker_mounts
+                + [
                     f"{self.image}:{self.tag}",
                     "discover",
                     "--config",

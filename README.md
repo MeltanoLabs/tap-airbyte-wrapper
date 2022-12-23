@@ -16,6 +16,7 @@ Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
 |:--------------------|:--------:|:-------:|:------------|
 | airbyte_spec        | True     | None    | Specification for the Airbyte source connector. This is a JSON object minimally containing the `image` key. The `tag` key is optional and defaults to `latest`. |
 | airbyte_config      | False    | None    | Configuration to pass through to the Airbyte source connector, this can be gleaned by running the the tap with the `--about` flag and the `--config` flag pointing to a file containing the `airbyte_spec` configuration. This is a JSON object. |
+| docker_mounts       | False    | []      | Docker mounts to mount to the container. Expects a list of maps containing source, target, and type as is documented in the docker --mount documentation |
 | stream_maps         | False    | None    | Config object for stream maps capability. For more information check out [Stream Maps](https://sdk.meltano.com/en/latest/stream_maps.html). |
 | stream_map_config   | False    | None    | User-defined config values to be used within map expressions. |
 | flattening_enabled  | False    | None    | 'True' to enable schema flattening and automatically expand nested properties. |
