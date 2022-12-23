@@ -269,7 +269,11 @@ class TapAirbyte(Tap):
                 self.logger.warning("Unhandled message: %s", message)
         if proc.returncode != 0:
             raise AirbyteException(f"Could not run spec for {self.image}:{self.tag}: {proc.stderr}")
-        raise AirbyteException("No spec found")
+        raise AirbyteException(
+            "Could not output spec, no spec message received.\n"
+            f"Stdout: {proc.stdout.decode('utf-8')}\n"
+            f"Stderr: {proc.stderr.decode('utf-8')}"
+        )
 
     @staticmethod
     def print_spec_as_config(spec: Dict[str, Any]) -> None:
@@ -342,7 +346,11 @@ class TapAirbyte(Tap):
             raise AirbyteException(
                 f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
             )
-        raise AirbyteException("No connection status found")
+        raise AirbyteException(
+            "Could not verify connection, no connection status message received.\n"
+            f"Stdout: {proc.stdout.decode('utf-8')}\n"
+            f"Stderr: {proc.stderr.decode('utf-8')}"
+        )
 
     def run_connection_test(self) -> bool:  # type: ignore
         return self.run_check()
@@ -440,7 +448,8 @@ class TapAirbyte(Tap):
                 self._image: str = self.config["airbyte_spec"]["image"]
             except KeyError:
                 raise AirbyteException(
-                    "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
+                    "Airbyte spec is missing required fields. Please ensure you are passing --config "
+                    "and that the passed config contains airbyte_spec."
                 ) from KeyError
         return self._image
 
@@ -451,7 +460,8 @@ class TapAirbyte(Tap):
                 self._tag: str = cast(dict, self.config["airbyte_spec"]).get("tag", "latest")
             except KeyError:
                 raise AirbyteException(
-                    "Airbyte spec is missing required fields. Please ensure you are passing --config and that the passed config is valid."
+                    "Airbyte spec is missing required fields. Please ensure you are passing --config "
+                    "and that the passed config contains airbyte_spec."
                 ) from KeyError
         return self._tag
 
@@ -461,7 +471,7 @@ class TapAirbyte(Tap):
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
-            discover = subprocess.run(
+            proc = subprocess.run(
                 [
                     "docker",
                     "run",
@@ -476,8 +486,8 @@ class TapAirbyte(Tap):
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-            ).stdout
-        for line in discover.splitlines():
+            )
+        for line in proc.stdout.splitlines():
             try:
                 airbyte_message = orjson.loads(line)
             except orjson.JSONDecodeError:
@@ -486,7 +496,15 @@ class TapAirbyte(Tap):
                 self._process_log_message(airbyte_message)
             elif airbyte_message["type"] == AirbyteMessage.CATALOG:
                 return airbyte_message["catalog"]
-        raise AirbyteException("Could not discover catalog")
+        if proc.returncode != 0:
+            raise AirbyteException(
+                f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
+            )
+        raise AirbyteException(
+            "Could not discover catalog, no catalog message received. \n"
+            f"Stdout: {proc.stdout.decode('utf-8')}\n"
+            f"Stderr: {proc.stderr.decode('utf-8')}"
+        )
 
     @property
     def configured_airbyte_catalog(self) -> dict:
