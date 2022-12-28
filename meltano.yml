@@ -15,24 +15,15 @@ plugins:
         - state
         - about
         - stream-maps
-    - name: tap-github
-      namespace: tap_github
+    - name: tap-pokeapi
+      namespace: tap_pokeapi
       inherit_from: tap-airbyte
       config:
         airbyte_spec:
-          image: "airbyte/source-github"
-          tag: "0.3.8"
+          image: "airbyte/source-pokeapi"
+          tag: "0.1.5"
         airbyte_config:
-          credentials:
-            access_token: FIXME
-          start_date: "2021-01-01T00:00:00Z"
-          repository: MeltanoLabs/*
-          page_size_for_large_streams: 15
-      select:
-        - issues.*
-      metadata:
-        "*":
-          replication-method: incremental
+          pokemon_name: smeargle
   loaders:
     - name: target-jsonl
       variant: andyh1203

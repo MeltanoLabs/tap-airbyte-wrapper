@@ -11,6 +11,8 @@
 """Airbyte tap class"""
 
 import atexit
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -160,6 +162,7 @@ class TapAirbyte(Tap):
     _image: Optional[str] = None
     _tag: Optional[str] = None
     _docker_mounts: Optional[List[Dict[str, str]]] = None
+    container_runtime = os.getenv("OCI_RUNTIME", "docker")
 
     # Airbyte -> Demultiplexer -< Singer Streams
     airbyte_demuxer: Thread
@@ -250,9 +253,9 @@ class TapAirbyte(Tap):
                     cls.logger.info(
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
                     )
-                    TapAirbyte.config_jsonschema["properties"]["airbyte_config"] = spec
-                    TapAirbyte.print_about(format=format)
-                    TapAirbyte.print_spec_as_config(spec)
+                    cls.config_jsonschema["properties"]["airbyte_config"] = spec
+                    cls.print_about(format=format)
+                    cls.print_spec_as_config(spec)
                 return
             # End modification
             tap: TapAirbyte = cls(  # type: ignore
@@ -272,6 +275,32 @@ class TapAirbyte(Tap):
                 tap.sync_all()
 
         return cli
+
+    def __init__(self, *args, **kwargs) -> None:
+        # OCI check
+        self.logger.info("Checking for %s on PATH.", self.container_runtime)
+        if not shutil.which(self.container_runtime):
+            self.logger.error(
+                "Could not find %s on PATH. Please verify that %s is installed and on PATH.",
+                self.container_runtime,
+                self.container_runtime,
+            )
+            sys.exit(1)
+        self.logger.info("Found %s on PATH.", self.container_runtime)
+        self.logger.info("Checking %s version.", self.container_runtime)
+        try:
+            subprocess.check_call([self.container_runtime, "version"], stdout=subprocess.DEVNULL)
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                "Failed to execute %s version with exit code %d. Please verify that %s is configured correctly.",
+                self.container_runtime,
+                e.returncode,
+                self.container_runtime,
+            )
+            sys.exit(1)
+        self.logger.info("Successfully executed %s version.", self.container_runtime)
+        # End OCI check
+        super().__init__(*args, **kwargs)
 
     def run_help(self):
         subprocess.run(

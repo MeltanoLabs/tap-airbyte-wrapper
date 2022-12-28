@@ -1,4 +1,4 @@
-<h2 align="center">Tap-Airbyte-Wrapper</h2>
+<h1 align="center">Tap-Airbyte-Wrapper</h1>
 
 <p align="center">
 <a href="https://github.com/z3z1ma/tap-airbyte/actions/"><img alt="Actions Status" src="https://github.com/z3z1ma/tap-airbyte/actions/workflows/ci.yml/badge.svg"></a>
@@ -25,6 +25,12 @@ Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
 
 ### Configure using environment variables ✏️
 
+`OCI_RUNTIME` can be set to override the default of `docker`. This lets the tap work with podman, nerdctl, colima, and so on.
+
+```sh
+OCI_RUNTIME=nerdctl meltano run tap-pokeapi target-jsonl
+```
+
 This Singer tap will automatically import any environment variables within the working directory's
 `.env` if the `--config=ENV` is provided, such that config values will be considered if a matching
 environment variable is set either in the terminal context or in the `.env` file.
@@ -33,9 +39,8 @@ environment variable is set either in the terminal context or in the `.env` file
 
 First, configure your tap by creating a configuration json file. In this example we will call it `github.json` since this tap may use many configurations for different sources.
 
-> 🙇🏾‍♂️ This is an example to show `airbyte_spec` and `airbyte_config`, it does _not_ represent a complete [source-github](https://docs.airbyte.com/integrations/sources/github) config
 
-> ❗️ Remember the required keys for `airbyte_config` can be dumped to stdout by running --about **with** --config /path/to/FILE where FILE minimally contains just the airbyte_spec/image value
+> ❗️ Remember the required keys for `airbyte_config` can be dumped to stdout by running `tap-airbyte --about --config /path/to/FILE` where FILE minimally contains just the airbyte_spec.image value
 
 ```json
 {
