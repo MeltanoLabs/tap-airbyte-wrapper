@@ -10,12 +10,12 @@
 # substantial portions of the Software.
 """Airbyte tap class"""
 
-import atexit
 import os
 import shutil
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -53,20 +53,12 @@ def default(obj):
 
 
 def write_message(message) -> None:
-    try:
-        sys.stdout.buffer.write(
-            orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
-        )
-        sys.stdout.buffer.flush()
-    except BrokenPipeError:
-        cast(Logger, TapAirbyte.logger).warning("Broken pipe detected, initiating shutdown")
-        if AIRBYTE_JOB:
-            cast(Logger, TapAirbyte.logger).info("Attempting to terminate Airbyte job")
-            AIRBYTE_JOB.kill()
-        raise
+    sys.stdout.buffer.write(
+        orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
+    )
+    sys.stdout.buffer.flush()
 
 
-AIRBYTE_JOB: Optional[subprocess.Popen] = None
 STDOUT_LOCK = Lock()
 singer.write_message = write_message
 
@@ -165,7 +157,6 @@ class TapAirbyte(Tap):
     container_runtime = os.getenv("OCI_RUNTIME", "docker")
 
     # Airbyte -> Demultiplexer -< Singer Streams
-    airbyte_demuxer: Thread
     singer_consumers: List[Thread] = []
     buffers: Dict[str, Queue] = {}
 
@@ -418,8 +409,8 @@ class TapAirbyte(Tap):
     def run_connection_test(self) -> bool:  # type: ignore
         return self.run_check()
 
+    @contextmanager
     def run_read(self):
-        global AIRBYTE_JOB
         with TemporaryDirectory() as tmpdir:
             with open(f"{tmpdir}/config.json", "wb") as config, open(
                 f"{tmpdir}/catalog.json", "wb"
@@ -430,7 +421,7 @@ class TapAirbyte(Tap):
                 with open(f"{tmpdir}/state.json", "wb") as state:
                     self.logger.debug("Using state: %s", self.airbyte_state)
                     state.write(orjson.dumps(self.airbyte_state))
-            AIRBYTE_JOB = subprocess.Popen(
+            proc = subprocess.Popen(
                 [
                     "docker",
                     "run",
@@ -452,59 +443,40 @@ class TapAirbyte(Tap):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            atexit.register(AIRBYTE_JOB.kill)
-            while True:
-                message = AIRBYTE_JOB.stdout.readline()
-                if not message and AIRBYTE_JOB.poll() is not None:
-                    break
-                try:
-                    airbyte_message = orjson.loads(message)
-                except orjson.JSONDecodeError:
-                    if message:
-                        self.logger.warning("Could not parse message: %s", message)
-                    continue
-                if airbyte_message["type"] == AirbyteMessage.RECORD:
-                    stream_buffer: Queue = self.buffers.setdefault(
-                        airbyte_message["record"]["stream"],
-                        Queue(),
+            try:
+                # Context is held until EOF or exception
+                yield proc
+            finally:
+                if not self.eof_received:
+                    proc.kill()
+                    self.logger.warning("Airbyte process terminated before EOF message received.")
+                self.logger.debug("Waiting for Airbyte process to terminate.")
+                returncode = proc.wait()
+                if not self.eof_received:
+                    # If EOF was not received, the process was killed and we should raise an exception
+                    type, value, _ = sys.exc_info()
+                    raise AirbyteException(
+                        f"Airbyte process terminated early:\n{type.__name__}: {value}"
                     )
-                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
-                elif airbyte_message["type"] in (
-                    AirbyteMessage.LOG,
-                    AirbyteMessage.TRACE,
-                ):
-                    self._process_log_message(airbyte_message)
-                elif airbyte_message["type"] == AirbyteMessage.STATE:
-                    state_message = airbyte_message["state"]
-                    if "data" in state_message:
-                        unpacked_state = state_message["data"]
-                    elif "type" == "STREAM":
-                        unpacked_state = state_message["stream"]
-                    elif "type" == "GLOBAL":
-                        unpacked_state = state_message["global"]
-                    elif "type" == "LEGACY":
-                        unpacked_state = state_message["legacy"]
-                    self.airbyte_state = unpacked_state
-                    with STDOUT_LOCK:
-                        singer.write_message(singer.StateMessage(self.airbyte_state))
-                else:
-                    self.logger.warning("Unhandled message: %s", airbyte_message)
-            atexit.unregister(AIRBYTE_JOB.kill)
+                if returncode != 0:
+                    # If EOF was received, the process should have exited with return code 0
+                    raise AirbyteException(
+                        f"Airbyte process failed with return code {returncode}: {proc.stderr.read()}"
+                    )
 
     def _process_log_message(self, airbyte_message: Dict[str, Any]) -> None:
         if airbyte_message["type"] == AirbyteMessage.LOG:
             self.logger.info(airbyte_message["log"])
         elif airbyte_message["type"] == AirbyteMessage.TRACE:
             if airbyte_message["trace"].get("type") == "ERROR":
+                exc = AirbyteException(
+                    airbyte_message["trace"]["error"].get("stack_trace", "Airbyte process failed.")
+                )
                 self.logger.critical(
                     airbyte_message["trace"]["error"]["message"],
-                    exc_info=AirbyteException(
-                        airbyte_message["trace"]["error"].get(
-                            "stack_trace", "Airbyte process failed."
-                        )
-                    ),
+                    exc_info=exc,
                 )
-                sys.exit(1)
+                raise exc
             self.logger.debug(airbyte_message["trace"])
 
     @property
@@ -622,9 +594,8 @@ class TapAirbyte(Tap):
         self.airbyte_state = state
 
     def sync_all(self) -> None:  # type: ignore
-        self.airbyte_demuxer = Thread(target=self.run_read, daemon=True)
-        self.airbyte_demuxer.start()
         stream: Stream
+        self.eof_received = False
         for stream in self.streams.values():
             if not stream.selected and not stream.has_selected_descendents:
                 self.logger.info(f"Skipping deselected stream '{stream.name}'.")
@@ -633,13 +604,46 @@ class TapAirbyte(Tap):
             consumer.start()
             self.singer_consumers.append(consumer)
         t1 = time.perf_counter()
-        self.airbyte_demuxer.join()
+        with self.run_read() as airbyte_job:
+            while True:
+                message = airbyte_job.stdout.readline()
+                if not message and airbyte_job.poll() is not None:
+                    self.eof_received = True
+                    break
+                try:
+                    airbyte_message = orjson.loads(message)
+                except orjson.JSONDecodeError:
+                    if message:
+                        self.logger.warning("Could not parse message: %s", message)
+                    continue
+                if airbyte_message["type"] == AirbyteMessage.RECORD:
+                    stream_buffer: Queue = self.buffers.setdefault(
+                        airbyte_message["record"]["stream"],
+                        Queue(),
+                    )
+                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
+                elif airbyte_message["type"] in (
+                    AirbyteMessage.LOG,
+                    AirbyteMessage.TRACE,
+                ):
+                    self._process_log_message(airbyte_message)
+                elif airbyte_message["type"] == AirbyteMessage.STATE:
+                    state_message = airbyte_message["state"]
+                    if "data" in state_message:
+                        unpacked_state = state_message["data"]
+                    elif "type" == "STREAM":
+                        unpacked_state = state_message["stream"]
+                    elif "type" == "GLOBAL":
+                        unpacked_state = state_message["global"]
+                    elif "type" == "LEGACY":
+                        unpacked_state = state_message["legacy"]
+                    self.airbyte_state = unpacked_state
+                    with STDOUT_LOCK:
+                        singer.write_message(singer.StateMessage(self.airbyte_state))
+                else:
+                    self.logger.warning("Unhandled message: %s", airbyte_message)
         for sync in self.singer_consumers:
             sync.join()
-        if AIRBYTE_JOB and AIRBYTE_JOB.returncode != 0:
-            raise AirbyteException(
-                f"Airbyte process failed with return code {AIRBYTE_JOB.returncode}: {AIRBYTE_JOB.stderr.read()}"
-            )
         with STDOUT_LOCK:
             singer.write_message(singer.StateMessage(self.airbyte_state))
         t2 = time.perf_counter()
@@ -700,10 +704,8 @@ class AirbyteStream(Stream):
         """Get the buffer for the stream."""
         if not self._buffer:
             while self.name not in self.parent.buffers:
-                if not self.parent.airbyte_demuxer.is_alive():
-                    self.logger.debug(
-                        f"Airbyte demuxer died before records were received for stream {self.name}"
-                    )
+                if self.parent.eof_received:
+                    # EOF received, no records for this stream
                     self._buffer = Queue()
                     break
                 self.logger.debug(f"Waiting for records from Airbyte for stream {self.name}...")
@@ -714,7 +716,7 @@ class AirbyteStream(Stream):
 
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         """Get records from the stream."""
-        while self.parent.airbyte_demuxer.is_alive():
+        while self.parent.eof_received is False or not self.buffer.empty():
             try:
                 # The timeout permits the consumer to re-check the producer is alive
                 yield self.buffer.get(timeout=1)
