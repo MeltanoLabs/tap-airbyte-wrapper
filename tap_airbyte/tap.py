@@ -39,7 +39,7 @@ from singer_sdk.tap_base import CliTestOptionValue
 
 
 # Sentinel value for broken pipe
-EOP = object()
+PIPE_CLOSED = object()
 
 
 def default(obj):
@@ -63,9 +63,9 @@ def write_message(message) -> None:
         )
         sys.stdout.buffer.flush()
     except BrokenPipeError:
-        if TapAirbyte.safe_broken_pipe is not EOP:
+        if TapAirbyte.pipe_status is not PIPE_CLOSED:
             TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")
-            TapAirbyte.safe_broken_pipe = EOP
+            TapAirbyte.pipe_status = PIPE_CLOSED
 
 
 STDOUT_LOCK = Lock()
@@ -158,7 +158,7 @@ class TapAirbyte(Tap):
         ),
     ).to_dict()
     conf_dir: str = "/tmp"
-    safe_broken_pipe = None
+    pipe_status = None
 
     # Airbyte image to run
     _image: Optional[str] = None
@@ -462,13 +462,13 @@ class TapAirbyte(Tap):
                     self.logger.warning("Airbyte process terminated before EOF message received.")
                 self.logger.debug("Waiting for Airbyte process to terminate.")
                 returncode = proc.wait()
-                if not self.eof_received and not self.safe_broken_pipe is EOP:
+                if not self.eof_received and TapAirbyte.pipe_status is not PIPE_CLOSED:
                     # If EOF was not received, the process was killed and we should raise an exception
                     type, value, _ = sys.exc_info()
                     raise AirbyteException(
                         f"Airbyte process terminated early:\n{type.__name__}: {value}"
                     )
-                if returncode != 0 and not self.safe_broken_pipe is EOP:
+                if returncode != 0 and TapAirbyte.pipe_status is not PIPE_CLOSED:
                     # If EOF was received, the process should have exited with return code 0
                     raise AirbyteException(
                         f"Airbyte process failed with return code {returncode}: {proc.stderr.read()}"
@@ -616,7 +616,7 @@ class TapAirbyte(Tap):
         t1 = time.perf_counter()
         with self.run_read() as airbyte_job:
             # Main processor loop
-            while True:
+            while TapAirbyte.pipe_status is not PIPE_CLOSED:
                 message = airbyte_job.stdout.readline()
                 if not message and airbyte_job.poll() is not None:
                     self.eof_received = True
@@ -730,14 +730,14 @@ class AirbyteStream(Stream):
         """Get records from the stream."""
         while (
             self.parent.eof_received is False or not self.buffer.empty()
-        ) and not self.parent.safe_broken_pipe is EOP:
+        ) and TapAirbyte.pipe_status is not PIPE_CLOSED:
             try:
                 # The timeout permits the consumer to re-check the producer is alive
                 yield self.buffer.get(timeout=1)
             except Empty:
                 continue
             self.buffer.task_done()
-        if self.name in self.parent.buffers and not self.parent.safe_broken_pipe is EOP:
+        if self.name in self.parent.buffers and TapAirbyte.pipe_status is not PIPE_CLOSED:
             while not self.buffer.empty():
                 yield self.buffer.get()
                 self.buffer.task_done()
