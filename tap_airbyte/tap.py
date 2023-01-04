@@ -736,13 +736,16 @@ class AirbyteStream(Stream):
         ) and TapAirbyte.pipe_status is not PIPE_CLOSED:
             try:
                 # The timeout permits the consumer to re-check the producer is alive
-                yield self.buffer.get(timeout=1)
+                yield self.buffer.get(timeout=1.0)
             except Empty:
                 continue
             self.buffer.task_done()
-        if self.name in self.parent.buffers and TapAirbyte.pipe_status is not PIPE_CLOSED:
-            while not self.buffer.empty():
-                yield self.buffer.get()
+        if self.name in self.parent.buffers:
+            while not self.buffer.empty() and TapAirbyte.pipe_status is not PIPE_CLOSED:
+                try:
+                    yield self.buffer.get(timeout=1.0)
+                except Empty:
+                    break
                 self.buffer.task_done()
 
 
