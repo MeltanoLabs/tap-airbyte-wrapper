@@ -38,6 +38,10 @@ from singer_sdk.helpers._classproperty import classproperty
 from singer_sdk.tap_base import CliTestOptionValue
 
 
+# Sentinel value for broken pipe
+EOP = object()
+
+
 def default(obj):
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
@@ -53,10 +57,15 @@ def default(obj):
 
 
 def write_message(message) -> None:
-    sys.stdout.buffer.write(
-        orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
-    )
-    sys.stdout.buffer.flush()
+    try:
+        sys.stdout.buffer.write(
+            orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
+        )
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        if TapAirbyte.safe_broken_pipe is not EOP:
+            TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")
+            TapAirbyte.safe_broken_pipe = EOP
 
 
 STDOUT_LOCK = Lock()
@@ -149,6 +158,7 @@ class TapAirbyte(Tap):
         ),
     ).to_dict()
     conf_dir: str = "/tmp"
+    safe_broken_pipe = None
 
     # Airbyte image to run
     _image: Optional[str] = None
@@ -452,13 +462,13 @@ class TapAirbyte(Tap):
                     self.logger.warning("Airbyte process terminated before EOF message received.")
                 self.logger.debug("Waiting for Airbyte process to terminate.")
                 returncode = proc.wait()
-                if not self.eof_received and not hasattr(self, "safe_broken_pipe"):
+                if not self.eof_received and not self.safe_broken_pipe is EOP:
                     # If EOF was not received, the process was killed and we should raise an exception
                     type, value, _ = sys.exc_info()
                     raise AirbyteException(
                         f"Airbyte process terminated early:\n{type.__name__}: {value}"
                     )
-                if returncode != 0 and not hasattr(self, "safe_broken_pipe"):
+                if returncode != 0 and not self.safe_broken_pipe is EOP:
                     # If EOF was received, the process should have exited with return code 0
                     raise AirbyteException(
                         f"Airbyte process failed with return code {returncode}: {proc.stderr.read()}"
@@ -605,54 +615,44 @@ class TapAirbyte(Tap):
             self.singer_consumers.append(consumer)
         t1 = time.perf_counter()
         with self.run_read() as airbyte_job:
-            try:
-                # Main processor loop
-                while True:
-                    message = airbyte_job.stdout.readline()
-                    if not message and airbyte_job.poll() is not None:
-                        self.eof_received = True
-                        break
-                    try:
-                        airbyte_message = orjson.loads(message)
-                    except orjson.JSONDecodeError:
-                        if message:
-                            self.logger.warning("Could not parse message: %s", message)
-                        continue
-                    if airbyte_message["type"] == AirbyteMessage.RECORD:
-                        stream_buffer: Queue = self.buffers.setdefault(
-                            airbyte_message["record"]["stream"],
-                            Queue(),
-                        )
-                        stream_buffer.put_nowait(airbyte_message["record"]["data"])
-                    elif airbyte_message["type"] in (
-                        AirbyteMessage.LOG,
-                        AirbyteMessage.TRACE,
-                    ):
-                        self._process_log_message(airbyte_message)
-                    elif airbyte_message["type"] == AirbyteMessage.STATE:
-                        state_message = airbyte_message["state"]
-                        if "data" in state_message:
-                            unpacked_state = state_message["data"]
-                        elif "type" == "STREAM":
-                            unpacked_state = state_message["stream"]
-                        elif "type" == "GLOBAL":
-                            unpacked_state = state_message["global"]
-                        elif "type" == "LEGACY":
-                            unpacked_state = state_message["legacy"]
-                        self.airbyte_state = unpacked_state
-                        with STDOUT_LOCK:
-                            singer.write_message(singer.StateMessage(self.airbyte_state))
-                    else:
-                        self.logger.warning("Unhandled message: %s", airbyte_message)
-            except KeyboardInterrupt:
-                self.logger.info("Received SIGINT, stopping sync.")
-            except BrokenPipeError:
-                self.logger.info("Received SIGPIPE, stopping sync.")
-                # This sentinel value is used to detect that the sync was interrupted by a SIGPIPE. We do not want
-                # to raise an exception in this case but rather let the program terminate naturally. This lets us
-                # pipe the output of the tap to other programs that may need only a subset of the stream such as a
-                # pager or head. All other cases are handled by true failures on the other end of the pipe.
-                self.safe_broken_pipe = object()
+            # Main processor loop
+            while True:
+                message = airbyte_job.stdout.readline()
+                if not message and airbyte_job.poll() is not None:
+                    self.eof_received = True
+                    break
+                try:
+                    airbyte_message = orjson.loads(message)
+                except orjson.JSONDecodeError:
+                    if message:
+                        self.logger.warning("Could not parse message: %s", message)
+                    continue
+                if airbyte_message["type"] == AirbyteMessage.RECORD:
+                    stream_buffer: Queue = self.buffers.setdefault(
+                        airbyte_message["record"]["stream"],
+                        Queue(),
+                    )
+                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
+                elif airbyte_message["type"] in (
+                    AirbyteMessage.LOG,
+                    AirbyteMessage.TRACE,
+                ):
+                    self._process_log_message(airbyte_message)
+                elif airbyte_message["type"] == AirbyteMessage.STATE:
+                    state_message = airbyte_message["state"]
+                    if "data" in state_message:
+                        unpacked_state = state_message["data"]
+                    elif "type" == "STREAM":
+                        unpacked_state = state_message["stream"]
+                    elif "type" == "GLOBAL":
+                        unpacked_state = state_message["global"]
+                    elif "type" == "LEGACY":
+                        unpacked_state = state_message["legacy"]
+                    self.airbyte_state = unpacked_state
+                    with STDOUT_LOCK:
+                        singer.write_message(singer.StateMessage(self.airbyte_state))
+                else:
+                    self.logger.warning("Unhandled message: %s", airbyte_message)
         for sync in self.singer_consumers:
             sync.join()
         if self.eof_received:
@@ -728,18 +728,16 @@ class AirbyteStream(Stream):
 
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         """Get records from the stream."""
-        while self.parent.eof_received is False or not self.buffer.empty():
+        while (
+            self.parent.eof_received is False or not self.buffer.empty()
+        ) and not self.parent.safe_broken_pipe is EOP:
             try:
                 # The timeout permits the consumer to re-check the producer is alive
                 yield self.buffer.get(timeout=1)
             except Empty:
                 continue
-            except BrokenPipeError:
-                self.logger.info("Received SIGPIPE, stopping sync of stream %s.", self.name)
-                self.parent.safe_broken_pipe = object()
-                break
             self.buffer.task_done()
-        if self.name in self.parent.buffers and not hasattr(self.parent, "safe_broken_pipe"):
+        if self.name in self.parent.buffers and not self.parent.safe_broken_pipe is EOP:
             while not self.buffer.empty():
                 yield self.buffer.get()
                 self.buffer.task_done()
