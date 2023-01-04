@@ -452,13 +452,13 @@ class TapAirbyte(Tap):
                     self.logger.warning("Airbyte process terminated before EOF message received.")
                 self.logger.debug("Waiting for Airbyte process to terminate.")
                 returncode = proc.wait()
-                if not self.eof_received:
+                if not self.eof_received and not hasattr(self, "safe_broken_pipe"):
                     # If EOF was not received, the process was killed and we should raise an exception
                     type, value, _ = sys.exc_info()
                     raise AirbyteException(
                         f"Airbyte process terminated early:\n{type.__name__}: {value}"
                     )
-                if returncode != 0:
+                if returncode != 0 and not hasattr(self, "safe_broken_pipe"):
                     # If EOF was received, the process should have exited with return code 0
                     raise AirbyteException(
                         f"Airbyte process failed with return code {returncode}: {proc.stderr.read()}"
@@ -605,47 +605,59 @@ class TapAirbyte(Tap):
             self.singer_consumers.append(consumer)
         t1 = time.perf_counter()
         with self.run_read() as airbyte_job:
-            while True:
-                message = airbyte_job.stdout.readline()
-                if not message and airbyte_job.poll() is not None:
-                    self.eof_received = True
-                    break
-                try:
-                    airbyte_message = orjson.loads(message)
-                except orjson.JSONDecodeError:
-                    if message:
-                        self.logger.warning("Could not parse message: %s", message)
-                    continue
-                if airbyte_message["type"] == AirbyteMessage.RECORD:
-                    stream_buffer: Queue = self.buffers.setdefault(
-                        airbyte_message["record"]["stream"],
-                        Queue(),
-                    )
-                    stream_buffer.put_nowait(airbyte_message["record"]["data"])
-                elif airbyte_message["type"] in (
-                    AirbyteMessage.LOG,
-                    AirbyteMessage.TRACE,
-                ):
-                    self._process_log_message(airbyte_message)
-                elif airbyte_message["type"] == AirbyteMessage.STATE:
-                    state_message = airbyte_message["state"]
-                    if "data" in state_message:
-                        unpacked_state = state_message["data"]
-                    elif "type" == "STREAM":
-                        unpacked_state = state_message["stream"]
-                    elif "type" == "GLOBAL":
-                        unpacked_state = state_message["global"]
-                    elif "type" == "LEGACY":
-                        unpacked_state = state_message["legacy"]
-                    self.airbyte_state = unpacked_state
-                    with STDOUT_LOCK:
-                        singer.write_message(singer.StateMessage(self.airbyte_state))
-                else:
-                    self.logger.warning("Unhandled message: %s", airbyte_message)
+            try:
+                # Main processor loop
+                while True:
+                    message = airbyte_job.stdout.readline()
+                    if not message and airbyte_job.poll() is not None:
+                        self.eof_received = True
+                        break
+                    try:
+                        airbyte_message = orjson.loads(message)
+                    except orjson.JSONDecodeError:
+                        if message:
+                            self.logger.warning("Could not parse message: %s", message)
+                        continue
+                    if airbyte_message["type"] == AirbyteMessage.RECORD:
+                        stream_buffer: Queue = self.buffers.setdefault(
+                            airbyte_message["record"]["stream"],
+                            Queue(),
+                        )
+                        stream_buffer.put_nowait(airbyte_message["record"]["data"])
+                    elif airbyte_message["type"] in (
+                        AirbyteMessage.LOG,
+                        AirbyteMessage.TRACE,
+                    ):
+                        self._process_log_message(airbyte_message)
+                    elif airbyte_message["type"] == AirbyteMessage.STATE:
+                        state_message = airbyte_message["state"]
+                        if "data" in state_message:
+                            unpacked_state = state_message["data"]
+                        elif "type" == "STREAM":
+                            unpacked_state = state_message["stream"]
+                        elif "type" == "GLOBAL":
+                            unpacked_state = state_message["global"]
+                        elif "type" == "LEGACY":
+                            unpacked_state = state_message["legacy"]
+                        self.airbyte_state = unpacked_state
+                        with STDOUT_LOCK:
+                            singer.write_message(singer.StateMessage(self.airbyte_state))
+                    else:
+                        self.logger.warning("Unhandled message: %s", airbyte_message)
+            except KeyboardInterrupt:
+                self.logger.info("Received SIGINT, stopping sync.")
+            except BrokenPipeError:
+                self.logger.info("Received SIGPIPE, stopping sync.")
+                # This sentinel value is used to detect that the sync was interrupted by a SIGPIPE. We do not want
+                # to raise an exception in this case but rather let the program terminate naturally. This lets us
+                # pipe the output of the tap to other programs that may need only a subset of the stream such as a
+                # pager or head. All other cases are handled by true failures on the other end of the pipe.
+                self.safe_broken_pipe = object()
         for sync in self.singer_consumers:
             sync.join()
-        with STDOUT_LOCK:
-            singer.write_message(singer.StateMessage(self.airbyte_state))
+        if self.eof_received:
+            with STDOUT_LOCK:
+                singer.write_message(singer.StateMessage(self.airbyte_state))
         t2 = time.perf_counter()
         for stream in self.streams.values():
             stream.log_sync_costs()
