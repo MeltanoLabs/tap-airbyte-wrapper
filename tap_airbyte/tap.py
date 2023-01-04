@@ -653,9 +653,13 @@ class TapAirbyte(Tap):
                         singer.write_message(singer.StateMessage(self.airbyte_state))
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
-        self.logger.info("Waiting for sync threads to finish...")
-        for sync in self.singer_consumers:
-            sync.join()
+        # Daemon threads will be terminated when the main thread exits
+        # so we do not need to wait on them to join after SIGPIPE
+        if TapAirbyte.pipe_status is not PIPE_CLOSED:
+            self.logger.info("Waiting for sync threads to finish...")
+            for sync in self.singer_consumers:
+                sync.join()
+        # Write final state if EOF was received from Airbyte
         if self.eof_received:
             self.logger.info("EOF received, writing final state")
             with STDOUT_LOCK:
