@@ -10,6 +10,7 @@
 # substantial portions of the Software.
 """Airbyte tap class"""
 
+import errno
 import os
 import shutil
 import subprocess
@@ -20,7 +21,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import lru_cache
-from logging import Logger
 from pathlib import Path, PurePath
 from queue import Empty, Queue
 from tempfile import TemporaryDirectory
@@ -62,10 +62,15 @@ def write_message(message) -> None:
             orjson.dumps(message.to_dict(), option=TapAirbyte.ORJSON_OPTS, default=default)
         )
         sys.stdout.buffer.flush()
-    except BrokenPipeError:
-        if TapAirbyte.pipe_status is not PIPE_CLOSED:
+    except IOError as e:
+        # Broken pipe
+        if e.errno == errno.EPIPE and TapAirbyte.pipe_status is not PIPE_CLOSED:
             TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")
             TapAirbyte.pipe_status = PIPE_CLOSED
+            # Prevent BrokenPipe writes to closed stdout
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        else:
+            raise
 
 
 STDOUT_LOCK = Lock()
@@ -659,12 +664,10 @@ class TapAirbyte(Tap):
             self.logger.info("Waiting for sync threads to finish...")
             for sync in self.singer_consumers:
                 sync.join()
-        # Write final state if EOF was received from Airbyte
-        if self.eof_received:
-            self.logger.info("EOF received, writing final state")
-            with STDOUT_LOCK:
-                singer.write_message(singer.StateMessage(self.airbyte_state))
-                self.logger.info("Final state: %s", self.airbyte_state)
+            # Write final state if EOF was received from Airbyte
+            if self.eof_received:
+                with STDOUT_LOCK:
+                    singer.write_message(singer.StateMessage(self.airbyte_state))
         t2 = time.perf_counter()
         for stream in self.streams.values():
             stream.log_sync_costs()
