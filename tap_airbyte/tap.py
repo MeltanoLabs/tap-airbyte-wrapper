@@ -624,6 +624,7 @@ class TapAirbyte(Tap):
                     message = airbyte_job.stdout.readline()
                 else:
                     time.sleep(0.1)
+                    continue
                 if not message and airbyte_job.poll() is not None:
                     self.eof_received = True
                     break
