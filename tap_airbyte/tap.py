@@ -11,7 +11,6 @@
 """Airbyte tap class"""
 
 import os
-import select
 import shutil
 import subprocess
 import sys
@@ -617,14 +616,8 @@ class TapAirbyte(Tap):
         t1 = time.perf_counter()
         with self.run_read() as airbyte_job:
             # Main processor loop
-            stdout_poll = select.poll()
-            stdout_poll.register(airbyte_job.stdout, select.POLLIN)
             while TapAirbyte.pipe_status is not PIPE_CLOSED:
-                if stdout_poll.poll(0):  # avoid blocking to the best of our ability
-                    message = airbyte_job.stdout.readline()
-                else:
-                    time.sleep(0.1)
-                    continue
+                message = airbyte_job.stdout.readline()
                 if not message and airbyte_job.poll() is not None:
                     self.eof_received = True
                     break
@@ -660,11 +653,14 @@ class TapAirbyte(Tap):
                         singer.write_message(singer.StateMessage(self.airbyte_state))
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
+        self.logger.info("Waiting for sync threads to finish...")
         for sync in self.singer_consumers:
             sync.join()
         if self.eof_received:
+            self.logger.info("EOF received, writing final state")
             with STDOUT_LOCK:
                 singer.write_message(singer.StateMessage(self.airbyte_state))
+                self.logger.info("Final state: %s", self.airbyte_state)
         t2 = time.perf_counter()
         for stream in self.streams.values():
             stream.log_sync_costs()
