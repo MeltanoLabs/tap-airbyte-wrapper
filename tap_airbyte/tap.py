@@ -734,8 +734,12 @@ class AirbyteStream(Stream):
                 yield self.buffer.get(timeout=1)
             except Empty:
                 continue
+            except BrokenPipeError:
+                self.logger.info("Received SIGPIPE, stopping sync of stream %s.", self.name)
+                self.parent.safe_broken_pipe = object()
+                break
             self.buffer.task_done()
-        if self.name in self.parent.buffers:
+        if self.name in self.parent.buffers and not hasattr(self.parent, "safe_broken_pipe"):
             while not self.buffer.empty():
                 yield self.buffer.get()
                 self.buffer.task_done()
