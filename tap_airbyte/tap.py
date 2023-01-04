@@ -11,6 +11,7 @@
 """Airbyte tap class"""
 
 import os
+import select
 import shutil
 import subprocess
 import sys
@@ -616,8 +617,13 @@ class TapAirbyte(Tap):
         t1 = time.perf_counter()
         with self.run_read() as airbyte_job:
             # Main processor loop
+            stdout_poll = select.poll()
+            stdout_poll.register(airbyte_job.stdout, select.POLLIN)
             while TapAirbyte.pipe_status is not PIPE_CLOSED:
-                message = airbyte_job.stdout.readline()
+                if stdout_poll.poll(0):  # avoid blocking to the best of our ability
+                    message = airbyte_job.stdout.readline()
+                else:
+                    time.sleep(0.1)
                 if not message and airbyte_job.poll() is not None:
                     self.eof_received = True
                     break
