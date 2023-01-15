@@ -322,7 +322,7 @@ class TapAirbyte(Tap):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        for line in proc.stdout.splitlines():
+        for line in proc.stdout.decode("utf-8").splitlines():
             try:
                 message = orjson.loads(line)
             except orjson.JSONDecodeError:
@@ -390,7 +390,7 @@ class TapAirbyte(Tap):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-        for line in proc.stdout.splitlines():
+        for line in proc.stdout.decode("utf-8").splitlines():
             try:
                 message = orjson.loads(line)
             except orjson.JSONDecodeError:
@@ -561,15 +561,15 @@ class TapAirbyte(Tap):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-        for line in proc.stdout.splitlines():
+        for line in proc.stdout.decode("utf-8").splitlines():
             try:
-                airbyte_message = orjson.loads(line)
+                message = orjson.loads(line)
             except orjson.JSONDecodeError:
                 continue
-            if airbyte_message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
-                self._process_log_message(airbyte_message)
-            elif airbyte_message["type"] == AirbyteMessage.CATALOG:
-                return airbyte_message["catalog"]
+            if message["type"] in (AirbyteMessage.LOG, AirbyteMessage.TRACE):
+                self._process_log_message(message)
+            elif message["type"] == AirbyteMessage.CATALOG:
+                return message["catalog"]
         if proc.returncode != 0:
             raise AirbyteException(
                 f"Discover failed with return code {proc.returncode}: {proc.stderr.decode()}"
