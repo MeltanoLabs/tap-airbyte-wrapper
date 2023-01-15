@@ -10,6 +10,8 @@
 # substantial portions of the Software.
 """Airbyte tap class"""
 
+from __future__ import annotations
+
 import errno
 import os
 import shutil
