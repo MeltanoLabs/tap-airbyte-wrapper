@@ -39,7 +39,6 @@ from singer_sdk.cli import common_options
 from singer_sdk.helpers._classproperty import classproperty
 from singer_sdk.tap_base import CliTestOptionValue
 
-
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
 
@@ -119,8 +118,8 @@ class TapAirbyte(Tap):
             ),
             required=True,
             description=(
-                "Specification for the Airbyte source connector. This is a JSON object minimally containing "
-                "the `image` key. The `tag` key is optional and defaults to `latest`."
+                "Specification for the Airbyte source connector. This is a JSON object minimally"
+                " containing the `image` key. The `tag` key is optional and defaults to `latest`."
             ),
         ),
         th.Property(
@@ -128,9 +127,9 @@ class TapAirbyte(Tap):
             th.ObjectType(),
             required=False,
             description=(
-                "Configuration to pass through to the Airbyte source connector, this can be gleaned "
-                "by running the the tap with the `--about` flag and the `--config` flag pointing to "
-                "a file containing the `airbyte_spec` configuration. This is a JSON object."
+                "Configuration to pass through to the Airbyte source connector, this can be gleaned"
+                " by running the the tap with the `--about` flag and the `--config` flag pointing"
+                " to a file containing the `airbyte_spec` configuration. This is a JSON object."
             ),
         ),
         th.Property(
@@ -159,8 +158,9 @@ class TapAirbyte(Tap):
             ),
             required=False,
             description=(
-                "Docker mounts to make available to the Airbyte container. Expects a list of maps "
-                "containing source, target, and type as is documented in the docker --mount documentation"
+                "Docker mounts to make available to the Airbyte container. Expects a list of maps"
+                " containing source, target, and type as is documented in the docker --mount"
+                " documentation"
             ),
         ),
     ).to_dict()
@@ -300,7 +300,10 @@ class TapAirbyte(Tap):
             subprocess.check_call([self.container_runtime, "version"], stdout=subprocess.DEVNULL)
         except subprocess.CalledProcessError as e:
             self.logger.error(
-                "Failed to execute %s version with exit code %d. Please verify that %s is configured correctly.",
+                (
+                    "Failed to execute %s version with exit code %d. Please verify that %s is"
+                    " configured correctly."
+                ),
                 self.container_runtime,
                 e.returncode,
                 self.container_runtime,
@@ -415,7 +418,8 @@ class TapAirbyte(Tap):
                 self.logger.warning("Unhandled message: %s", message)
         if proc.returncode != 0:
             raise AirbyteException(
-                f"Connection check failed with return code {proc.returncode}: {proc.stderr.decode()}"
+                f"Connection check failed with return code {proc.returncode}:"
+                f" {proc.stderr.decode()}"
             )
         raise AirbyteException(
             "Could not verify connection, no connection status message received.\n"
@@ -478,7 +482,8 @@ class TapAirbyte(Tap):
                 if returncode != 0 and TapAirbyte.pipe_status is not PIPE_CLOSED:
                     # If EOF was received, the process should have exited with return code 0
                     raise AirbyteException(
-                        f"Airbyte process failed with return code {returncode}: {proc.stderr.read()}"
+                        f"Airbyte process failed with return code {returncode}:"
+                        f" {proc.stderr.read()}"
                     )
 
     def _process_log_message(self, airbyte_message: Dict[str, Any]) -> None:
@@ -503,8 +508,8 @@ class TapAirbyte(Tap):
                 self._image: str = self.config["airbyte_spec"]["image"]
             except KeyError:
                 raise AirbyteException(
-                    "Airbyte spec is missing required fields. Please ensure you are passing --config "
-                    "and that the passed config contains airbyte_spec."
+                    "Airbyte spec is missing required fields. Please ensure you are passing"
+                    " --config and that the passed config contains airbyte_spec."
                 ) from KeyError
         return self._image
 
@@ -515,8 +520,8 @@ class TapAirbyte(Tap):
                 self._tag: str = cast(dict, self.config["airbyte_spec"]).get("tag", "latest")
             except KeyError:
                 raise AirbyteException(
-                    "Airbyte spec is missing required fields. Please ensure you are passing --config "
-                    "and that the passed config contains airbyte_spec."
+                    "Airbyte spec is missing required fields. Please ensure you are passing"
+                    " --config and that the passed config contains airbyte_spec."
                 ) from KeyError
         return self._tag
 
@@ -530,7 +535,9 @@ class TapAirbyte(Tap):
                 configured_mounts.extend(
                     [
                         "--mount",
-                        f"source={mount['source']},target={mount['target']},type={mount.get('type', 'bind')}",
+                        (
+                            f"source={mount['source']},target={mount['target']},type={mount.get('type', 'bind')}"
+                        ),
                     ]
                 )
             self._docker_mounts: List[str] = configured_mounts
