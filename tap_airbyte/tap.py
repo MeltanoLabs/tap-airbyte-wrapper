@@ -654,13 +654,14 @@ class TapAirbyte(Tap):
                     self._process_log_message(airbyte_message)
                 elif airbyte_message["type"] == AirbyteMessage.STATE:
                     state_message = airbyte_message["state"]
+                    state_type = state_message["type"]
                     if "data" in state_message:
                         unpacked_state = state_message["data"]
-                    elif "type" == "STREAM":
+                    elif state_type == "STREAM":
                         unpacked_state = state_message["stream"]
-                    elif "type" == "GLOBAL":
+                    elif state_type == "GLOBAL":
                         unpacked_state = state_message["global"]
-                    elif "type" == "LEGACY":
+                    elif state_type == "LEGACY":
                         unpacked_state = state_message["legacy"]
                     self.airbyte_state = unpacked_state
                     with STDOUT_LOCK:
