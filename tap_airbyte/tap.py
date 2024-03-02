@@ -696,6 +696,8 @@ class TapAirbyte(Tap):
                 # this is [str, ...?] in the Airbyte catalog
                 if "cursor_field" in stream and isinstance(stream["cursor_field"][0], str):
                     airbyte_stream.replication_key = stream["cursor_field"][0]
+                elif "default_cursor_field" in stream and isinstance(stream["default_cursor_field"][0], str):
+                    airbyte_stream.replication_key = stream["default_cursor_field"][0]
             except IndexError:
                 pass
             try:
