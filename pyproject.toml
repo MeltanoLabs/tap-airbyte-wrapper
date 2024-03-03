@@ -25,6 +25,7 @@ isort = "^5.10.1"
 
 [tool.poetry.extras]
 s3 = ["fs-s3fs"]
+source-pokeapi = ["git+https://github.com/airbytehq/airbyte/tree/master/airbyte-integrations/connectors/source-pokeapi.git"]
 
 [tool.black] # https://black.readthedocs.io/en/stable/usage_and_configuration/the_basics.html#configuration-via-a-file
 line-length = 100
