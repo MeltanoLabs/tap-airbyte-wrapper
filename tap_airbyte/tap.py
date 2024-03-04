@@ -284,7 +284,7 @@ class TapAirbyte(Tap):
 
         return cli
 
-    def __init__(self, *args, **kwargs) -> None:
+    def oci_check(self):
         # OCI check
         self.logger.info("Checking for %s on PATH.", self.container_runtime)
         if not shutil.which(self.container_runtime):
@@ -311,10 +311,10 @@ class TapAirbyte(Tap):
             sys.exit(1)
         self.logger.info("Successfully executed %s version.", self.container_runtime)
         # End OCI check
-        super().__init__(*args, **kwargs)
 
     @lru_cache
     def is_pip_installable(self):
+        is_pip_installable = False
         try:
             response = requests.get("https://connectors.airbyte.com/files/registries/v0/oss_registry.json", timeout=5)
             response.raise_for_status()
@@ -323,10 +323,13 @@ class TapAirbyte(Tap):
             image_name = self.config["airbyte_spec"]["image"]
             for source in sources:
                 if source["dockerRepository"] == image_name:
-                    return source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
+                    is_pip_installable = source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
+                    break
         except Exception:
             pass
-        return False
+        if not is_pip_installable:
+            self.oci_check()
+        return is_pip_installable
 
     def connector_bin(self):
         self.install()
