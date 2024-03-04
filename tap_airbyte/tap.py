@@ -187,7 +187,6 @@ class TapAirbyte(Tap):
     def cli(cls) -> Callable:
         @common_options.PLUGIN_VERSION
         @common_options.PLUGIN_ABOUT
-        @common_options.PLUGIN_ABOUT_FORMAT
         @common_options.PLUGIN_CONFIG
         @click.option(
             "--discover",
@@ -334,7 +333,7 @@ class TapAirbyte(Tap):
         return str(self.venv_path() / "bin" / self.source_name())
 
     def venv_path(self):
-        return Path.cwd() / f".venv-airbyte-{self.source_name()}"
+        return os.path.abspath(__file__) / f".venv-airbyte-{self.source_name()}"
 
     def source_name(self):
         return self.config["airbyte_spec"]["image"].split("/")[1]
