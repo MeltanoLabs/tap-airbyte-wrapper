@@ -333,7 +333,7 @@ class TapAirbyte(Tap):
         return str(self.venv_path() / "bin" / self.source_name())
 
     def venv_path(self):
-        return os.path.abspath(__file__) / f".venv-airbyte-{self.source_name()}"
+        return Path(__file__).resolve() / f".venv-airbyte-{self.source_name()}"
 
     def source_name(self):
         return self.config["airbyte_spec"]["image"].split("/")[1]
