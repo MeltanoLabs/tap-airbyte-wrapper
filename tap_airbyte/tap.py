@@ -342,7 +342,10 @@ class TapAirbyte(Tap):
         return self.config["airbyte_spec"]["image"].split("/")[1]
 
     def source_package_name(self):
-        return f"airbyte-{self.source_name()}"
+        name = f"airbyte-{self.source_name()}"
+        if self.config["airbyte_spec"]["tag"] != "latest":
+            name += f"=={self.config['airbyte_spec']['tag']}"
+        return name
 
     def install(self):
         venv_path = self.venv_path()
