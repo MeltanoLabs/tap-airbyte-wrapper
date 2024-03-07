@@ -696,6 +696,12 @@ class TapAirbyte(Tap):
                 # this is [str, ...?] in the Airbyte catalog
                 if "cursor_field" in stream and isinstance(stream["cursor_field"][0], str):
                     airbyte_stream.replication_key = stream["cursor_field"][0]
+                elif "source_defined_cursor" in stream and isinstance(stream["source_defined_cursor"], bool) and stream["source_defined_cursor"]:
+                    # The stream has a source defined cursor. Try using that
+                    if "default_cursor_field" in stream and isinstance(stream["default_cursor_field"][0], str):
+                        airbyte_stream.replication_key = stream["default_cursor_field"][0]
+                    else:
+                        self.logger.warning(f"Stream {stream['name']} has a source defined cursor but no default_cursor_field.")
             except IndexError:
                 pass
             try:
