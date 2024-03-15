@@ -29,6 +29,7 @@ from tempfile import TemporaryDirectory
 from threading import Lock, Thread
 from typing import Any, Callable, Dict, Iterable, List, Optional, cast
 from uuid import UUID
+import requests
 
 import click
 import orjson
@@ -186,7 +187,6 @@ class TapAirbyte(Tap):
     def cli(cls) -> Callable:
         @common_options.PLUGIN_VERSION
         @common_options.PLUGIN_ABOUT
-        @common_options.PLUGIN_ABOUT_FORMAT
         @common_options.PLUGIN_CONFIG
         @click.option(
             "--discover",
@@ -284,7 +284,7 @@ class TapAirbyte(Tap):
 
         return cli
 
-    def __init__(self, *args, **kwargs) -> None:
+    def oci_check(self):
         # OCI check
         self.logger.info("Checking for %s on PATH.", self.container_runtime)
         if not shutil.which(self.container_runtime):
@@ -311,16 +311,68 @@ class TapAirbyte(Tap):
             sys.exit(1)
         self.logger.info("Successfully executed %s version.", self.container_runtime)
         # End OCI check
-        super().__init__(*args, **kwargs)
+
+    @lru_cache
+    def is_pip_installable(self):
+        is_pip_installable = False
+        try:
+            response = requests.get("https://connectors.airbyte.com/files/registries/v0/oss_registry.json", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            sources = data["sources"]
+            image_name = self.config["airbyte_spec"]["image"]
+            for source in sources:
+                if source["dockerRepository"] == image_name:
+                    is_pip_installable = source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
+                    break
+        except Exception:
+            pass
+        if not is_pip_installable:
+            self.oci_check()
+        return is_pip_installable
+
+    def connector_bin(self):
+        self.install()
+        return str(self.venv_path() / "bin" / self.source_name())
+
+    def venv_path(self):
+        return Path(__file__).parent.resolve() / f".venv-airbyte-{self.source_name()}"
+
+    def source_name(self):
+        return self.config["airbyte_spec"]["image"].split("/")[1]
+
+    def source_package_name(self):
+        name = f"airbyte-{self.source_name()}"
+        if self.config["airbyte_spec"]["tag"] != "latest":
+            name += f"=={self.config['airbyte_spec']['tag']}"
+        return name
+
+    def install(self):
+        venv_path = self.venv_path()
+        if not venv_path.exists():
+            pip_path = str(venv_path / "bin" / "pip")
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_path)],
+                check=True,
+                stdout=subprocess.PIPE,
+            )
+            
+            subprocess.run(
+                [pip_path, "install", self.source_package_name()],
+                check=True,
+                stdout=subprocess.PIPE,
+            )
 
     def run_help(self):
         subprocess.run(
+            [self.connector_bin(), "--help"] if self.is_pip_installable() else
             ["docker", "run", f"{self.image}:{self.tag}", "--help"],
             check=True,
         )
 
     def run_spec(self):
         proc = subprocess.run(
+            [self.connector_bin(), "spec"] if self.is_pip_installable() else
             ["docker", "run", f"{self.image}:{self.tag}", "spec"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -375,6 +427,12 @@ class TapAirbyte(Tap):
             with open(f"{tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
             proc = subprocess.run(
+                [
+                    self.connector_bin(),
+                    "check",
+                    "--config",
+                    f"{tmpdir}/config.json",
+                ] if self.is_pip_installable() else
                 [
                     "docker",
                     "run",
@@ -443,6 +501,16 @@ class TapAirbyte(Tap):
                     self.logger.debug("Using state: %s", self.airbyte_state)
                     state.write(orjson.dumps(self.airbyte_state))
             proc = subprocess.Popen(
+                [
+                    self.connector_bin(),
+                    "read",
+                    "--config",
+                    f"{tmpdir}/config.json",
+                    "--catalog",
+                    f"{tmpdir}/catalog.json",
+                ]
+                + (["--state", f"{tmpdir}/state.json"] if self.airbyte_state else [])
+                if self.is_pip_installable() else
                 [
                     "docker",
                     "run",
@@ -550,6 +618,12 @@ class TapAirbyte(Tap):
             with open(f"{tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
             proc = subprocess.run(
+                [
+                    self.connector_bin(),
+                    "discover",
+                    "--config",
+                    f"{tmpdir}/config.json",
+                ] if self.is_pip_installable() else
                 [
                     "docker",
                     "run",
