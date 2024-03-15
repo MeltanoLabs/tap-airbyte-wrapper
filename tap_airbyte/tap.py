@@ -354,13 +354,13 @@ class TapAirbyte(Tap):
             subprocess.run(
                 [sys.executable, "-m", "venv", str(venv_path)],
                 check=True,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE,
             )
             
             subprocess.run(
                 [pip_path, "install", self.source_package_name()],
                 check=True,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE,
             )
 
     def run_help(self):
