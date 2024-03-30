@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
+import typing as t
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -27,18 +28,16 @@ from pathlib import Path, PurePath
 from queue import Empty, Queue
 from tempfile import TemporaryDirectory
 from threading import Lock, Thread
-from typing import Any, Callable, Dict, Iterable, List, Optional, cast
 from uuid import UUID
-import requests
 
 import click
 import orjson
+import requests
 import singer_sdk._singerlib as singer
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 from singer_sdk.cli import common_options
 from singer_sdk.helpers._classproperty import classproperty
-from singer_sdk.tap_base import CliTestOptionValue
 
 # Sentinel value for broken pipe
 PIPE_CLOSED = object()
@@ -67,8 +66,8 @@ def write_message(message) -> None:
     except IOError as e:
         # Broken pipe
         if e.errno == errno.EPIPE and TapAirbyte.pipe_status is not PIPE_CLOSED:
-            TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")
-            TapAirbyte.pipe_status = PIPE_CLOSED
+            TapAirbyte.logger.info("Received SIGPIPE, stopping sync of stream.")  # type: ignore
+            TapAirbyte.pipe_status = PIPE_CLOSED  # type: ignore
             # Prevent BrokenPipe writes to closed stdout
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         else:
@@ -165,26 +164,26 @@ class TapAirbyte(Tap):
             ),
         ),
     ).to_dict()
-    conf_dir: str = "/tmp"
+    airbyte_mount_dir: str = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     pipe_status = None
 
     # Airbyte image to run
-    _image: Optional[str] = None
-    _tag: Optional[str] = None
-    _docker_mounts: Optional[List[Dict[str, str]]] = None
+    _image: t.Optional[str] = None  # type: ignore
+    _tag: t.Optional[str] = None  # type: ignore
+    _docker_mounts: t.Optional[t.List[t.Dict[str, str]]] = None  # type: ignore
     container_runtime = os.getenv("OCI_RUNTIME", "docker")
 
     # Airbyte -> Demultiplexer -< Singer Streams
-    singer_consumers: List[Thread] = []
-    buffers: Dict[str, Queue] = {}
+    singer_consumers: t.List[Thread] = []
+    buffers: t.Dict[str, Queue] = {}
 
     # State container
-    airbyte_state: Dict[str, Any] = {}
+    airbyte_state: t.Dict[str, t.Any] = {}
 
     ORJSON_OPTS = orjson.OPT_APPEND_NEWLINE
 
     @classproperty
-    def cli(cls) -> Callable:
+    def cli(cls) -> t.Callable:
         @common_options.PLUGIN_VERSION
         @common_options.PLUGIN_ABOUT
         @common_options.PLUGIN_CONFIG
@@ -218,9 +217,9 @@ class TapAirbyte(Tap):
             discover: bool = False,
             test: bool = False,
             config: tuple[str, ...] = (),
-            state: Optional[str] = None,
-            catalog: Optional[str] = None,
-            format: Optional[str] = None,
+            state: t.Optional[str] = None,
+            catalog: t.Optional[str] = None,
+            format: t.Optional[str] = None,
         ) -> None:
             if version:
                 cls.print_version()
@@ -244,7 +243,7 @@ class TapAirbyte(Tap):
                 config_files.append(Path(config_path))
             # Enrich about info with spec if possible
             if about:
-                cls.discover_streams = lambda _: []
+                cls.discover_streams = lambda *_: t.cast(t.List[AirbyteStream], [])
                 try:
                     tap: TapAirbyte = cls(  # type: ignore
                         config=config_files or None,
@@ -256,13 +255,13 @@ class TapAirbyte(Tap):
                     spec = tap.run_spec()["connectionSpecification"]
                 except Exception:
                     cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
-                    cls.print_about(format=format)
+                    cls.print_about(output_format=format)
                 else:
                     cls.logger.info(
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
                     )
                     cls.config_jsonschema["properties"]["airbyte_config"] = spec
-                    cls.print_about(format=format)
+                    cls.print_about(output_format=format)
                     cls.print_spec_as_config(spec)
                 return
             # End modification
@@ -284,8 +283,8 @@ class TapAirbyte(Tap):
 
         return cli
 
-    def oci_check(self):
-        # OCI check
+    def _ensure_oci(self) -> None:
+        """Ensure that the OCI runtime is installed and available."""
         self.logger.info("Checking for %s on PATH.", self.container_runtime)
         if not shutil.which(self.container_runtime):
             self.logger.error(
@@ -310,70 +309,89 @@ class TapAirbyte(Tap):
             )
             sys.exit(1)
         self.logger.info("Successfully executed %s version.", self.container_runtime)
-        # End OCI check
 
-    @lru_cache
-    def is_pip_installable(self):
-        is_pip_installable = False
+    def _ensure_installed(self) -> None:
+        """Install the source connector from PyPI if necessary."""
+        if not self.venv.exists():
+            subprocess.run(
+                [sys.executable, "-m", "venv", self.venv],
+                check=True,
+                stdout=subprocess.PIPE,
+            )
+        if not (self.venv / "bin" / self.source_name).exists():
+            subprocess.run(
+                [self.venv / "bin" / "pip", "install", self._get_requirement_string()],
+                check=True,
+                stdout=subprocess.PIPE,
+            )
+
+    def _get_requirement_string(self) -> str:
+        """Get the requirement string for the source connector."""
+        name = f"airbyte-{self.source_name}"
+        if self.config["airbyte_spec"]["tag"] != "latest":
+            name += f"~={self.config['airbyte_spec']['tag']}"
+        return name
+
+    @lru_cache(maxsize=None)
+    def is_native(self) -> bool:
+        """Check if the connector is available on PyPI and can be managed natively without Docker."""
+        is_native = False
         try:
-            response = requests.get("https://connectors.airbyte.com/files/registries/v0/oss_registry.json", timeout=5)
+            response = requests.get(
+                "https://connectors.airbyte.com/files/registries/v0/oss_registry.json",
+                timeout=5,
+            )
             response.raise_for_status()
             data = response.json()
             sources = data["sources"]
             image_name = self.config["airbyte_spec"]["image"]
             for source in sources:
                 if source["dockerRepository"] == image_name:
-                    is_pip_installable = source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
+                    is_native = source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
                     break
         except Exception:
             pass
-        if not is_pip_installable:
-            self.oci_check()
-        return is_pip_installable
+        if is_native:
+            self._ensure_installed()
+        else:
+            self._ensure_oci()
+        return is_native
 
-    def connector_bin(self):
-        self.install()
-        return str(self.venv_path() / "bin" / self.source_name())
-
-    def venv_path(self):
-        return Path(__file__).parent.resolve() / f".venv-airbyte-{self.source_name()}"
-
-    def source_name(self):
-        return self.config["airbyte_spec"]["image"].split("/")[1]
-
-    def source_package_name(self):
-        name = f"airbyte-{self.source_name()}"
-        if self.config["airbyte_spec"]["tag"] != "latest":
-            name += f"=={self.config['airbyte_spec']['tag']}"
-        return name
-
-    def install(self):
-        venv_path = self.venv_path()
-        if not venv_path.exists():
-            pip_path = str(venv_path / "bin" / "pip")
-            subprocess.run(
-                [sys.executable, "-m", "venv", str(venv_path)],
-                check=True,
-                stdout=subprocess.PIPE,
-            )
-            
-            subprocess.run(
-                [pip_path, "install", self.source_package_name()],
-                check=True,
-                stdout=subprocess.PIPE,
-            )
-
-    def run_help(self):
-        subprocess.run(
-            [self.connector_bin(), "--help"] if self.is_pip_installable() else
-            ["docker", "run", f"{self.image}:{self.tag}", "--help"],
-            check=True,
+    def to_command(
+        self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
+    ) -> t.List[t.Union[str, Path]]:
+        """Construct the command to run the Airbyte connector."""
+        return (
+            [self.venv / "bin" / self.source_name, *airbyte_cmd]
+            if self.is_native()
+            else [
+                "docker",
+                "run",
+                *(docker_args or []),
+                f"{self.image}:{self.tag}",
+                "--",
+                *airbyte_cmd,
+            ]
         )
 
-    def run_spec(self):
+    @property
+    def venv(self) -> Path:
+        """Get the path to the virtual environment for the connector."""
+        return Path(__file__).parent.resolve() / f".venv-airbyte-{self.source_name}"
+
+    @property
+    def source_name(self) -> str:
+        """Get the name of the source connector."""
+        return self.config["airbyte_spec"]["image"].split("/")[1]
+
+    def run_help(self) -> None:
+        """Run the help command for the Airbyte connector."""
+        subprocess.run(self.to_command("--help"), check=True)
+
+    def run_spec(self) -> t.Dict[str, t.Any]:
+        """Run the spec command for the Airbyte connector."""
         proc = subprocess.run(
-            [self.connector_bin(), "spec"] if self.is_pip_installable() else
-            ["docker", "run", f"{self.image}:{self.tag}", "spec"],
+            self.to_command("spec"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -399,7 +417,8 @@ class TapAirbyte(Tap):
         )
 
     @staticmethod
-    def print_spec_as_config(spec: Dict[str, Any]) -> None:
+    def print_spec_as_config(spec: t.Dict[str, t.Any]) -> None:
+        """Print the spec as a config file to stdout."""
         print("\nSetup Instructions:\n")
         print("airbyte_config:")
         for prop, schema in spec["properties"].items():
@@ -423,31 +442,24 @@ class TapAirbyte(Tap):
                         print(f"    {inner_prop}: fixme")
 
     def run_check(self) -> bool:
-        with TemporaryDirectory() as tmpdir:
-            with open(f"{tmpdir}/config.json", "wb") as f:
+        """Run the check command for the Airbyte connector."""
+        with TemporaryDirectory() as host_tmpdir:
+            with open(f"{host_tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
+            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
             proc = subprocess.run(
-                [
-                    self.connector_bin(),
+                self.to_command(
                     "check",
                     "--config",
-                    f"{tmpdir}/config.json",
-                ] if self.is_pip_installable() else
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-i",
-                    "-v",
-                    f"{tmpdir}:{self.conf_dir}",
-                ]
-                + self.docker_mounts
-                + [
-                    f"{self.image}:{self.tag}",
-                    "check",
-                    "--config",
-                    f"{self.conf_dir}/config.json",
-                ],
+                    f"{runtime_conf_dir}/config.json",
+                    docker_args=[
+                        "--rm",
+                        "-i",
+                        "-v",
+                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
+                        *self.docker_mounts,
+                    ],
+                ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -485,50 +497,41 @@ class TapAirbyte(Tap):
             f"Stderr: {proc.stderr.decode('utf-8')}"
         )
 
-    def run_connection_test(self) -> bool:  # type: ignore
+    def run_connection_test(self) -> bool:
+        """Run the connection test for the Airbyte connector."""
         return self.run_check()
 
     @contextmanager
-    def run_read(self):
-        with TemporaryDirectory() as tmpdir:
-            with open(f"{tmpdir}/config.json", "wb") as config, open(
-                f"{tmpdir}/catalog.json", "wb"
-            ) as catalog:
+    def run_read(self) -> t.Iterator[subprocess.Popen]:
+        """Run the read command for the Airbyte connector."""
+        with TemporaryDirectory() as host_tmpdir:
+            with (
+                open(f"{host_tmpdir}/config.json", "wb") as config,
+                open(f"{host_tmpdir}/catalog.json", "wb") as catalog,
+            ):
                 config.write(orjson.dumps(self.config.get("airbyte_config", {})))
                 catalog.write(orjson.dumps(self.configured_airbyte_catalog))
             if self.airbyte_state:
-                with open(f"{tmpdir}/state.json", "wb") as state:
+                with open(f"{host_tmpdir}/state.json", "wb") as state:
                     self.logger.debug("Using state: %s", self.airbyte_state)
                     state.write(orjson.dumps(self.airbyte_state))
+            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
             proc = subprocess.Popen(
-                [
-                    self.connector_bin(),
+                self.to_command(
                     "read",
                     "--config",
-                    f"{tmpdir}/config.json",
+                    f"{runtime_conf_dir}/config.json",
                     "--catalog",
-                    f"{tmpdir}/catalog.json",
-                ]
-                + (["--state", f"{tmpdir}/state.json"] if self.airbyte_state else [])
-                if self.is_pip_installable() else
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-i",
-                    "-v",
-                    f"{tmpdir}:{self.conf_dir}",
-                ]
-                + self.docker_mounts
-                + [
-                    f"{self.image}:{self.tag}",
-                    "read",
-                    "--config",
-                    f"{self.conf_dir}/config.json",
-                    "--catalog",
-                    f"{self.conf_dir}/catalog.json",
-                ]
-                + (["--state", f"{self.conf_dir}/state.json"] if self.airbyte_state else []),
+                    f"{runtime_conf_dir}/catalog.json",
+                    *(["--state", f"{runtime_conf_dir}/state.json"] if self.airbyte_state else []),
+                    docker_args=[
+                        "--rm",
+                        "-i",
+                        "-v",
+                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
+                        *self.docker_mounts,
+                    ],
+                ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -543,18 +546,18 @@ class TapAirbyte(Tap):
                 returncode = proc.wait()
                 if not self.eof_received and TapAirbyte.pipe_status is not PIPE_CLOSED:
                     # If EOF was not received, the process was killed and we should raise an exception
-                    type, value, _ = sys.exc_info()
-                    raise AirbyteException(
-                        f"Airbyte process terminated early:\n{type.__name__}: {value}"
-                    )
+                    type_, value, _ = sys.exc_info()
+                    err = type_.__name__ if type_ else "UnknownError"
+                    raise AirbyteException(f"Airbyte process terminated early:\n{err}: {value}")
                 if returncode != 0 and TapAirbyte.pipe_status is not PIPE_CLOSED:
                     # If EOF was received, the process should have exited with return code 0
                     raise AirbyteException(
                         f"Airbyte process failed with return code {returncode}:"
-                        f" {proc.stderr.read()}"
+                        f" {proc.stderr.read() if proc.stderr else ''}"
                     )
 
-    def _process_log_message(self, airbyte_message: Dict[str, Any]) -> None:
+    def _process_log_message(self, airbyte_message: t.Dict[str, t.Any]) -> None:
+        """Process log messages from Airbyte."""
         if airbyte_message["type"] == AirbyteMessage.LOG:
             self.logger.info(airbyte_message["log"])
         elif airbyte_message["type"] == AirbyteMessage.TRACE:
@@ -571,6 +574,7 @@ class TapAirbyte(Tap):
 
     @property
     def image(self) -> str:
+        """Get the Airbyte connector image."""
         if not self._image:
             try:
                 self._image: str = self.config["airbyte_spec"]["image"]
@@ -583,9 +587,10 @@ class TapAirbyte(Tap):
 
     @property
     def tag(self) -> str:
+        """Get the Airbyte connector tag."""
         if not self._tag:
             try:
-                self._tag: str = cast(dict, self.config["airbyte_spec"]).get("tag", "latest")
+                self._tag: str = t.cast(dict, self.config["airbyte_spec"]).get("tag", "latest")
             except KeyError:
                 raise AirbyteException(
                     "Airbyte spec is missing required fields. Please ensure you are passing"
@@ -594,11 +599,12 @@ class TapAirbyte(Tap):
         return self._tag
 
     @property
-    def docker_mounts(self) -> List[str]:
+    def docker_mounts(self) -> t.List[str]:
+        """Get the Docker mounts for the Airbyte connector."""
         if not self._docker_mounts:
             configured_mounts = []
             mounts = self.config.get("docker_mounts", [])
-            mount: Dict[str, str]
+            mount: t.Dict[str, str]
             for mount in mounts:
                 configured_mounts.extend(
                     [
@@ -608,37 +614,30 @@ class TapAirbyte(Tap):
                         ),
                     ]
                 )
-            self._docker_mounts: List[str] = configured_mounts
+            self._docker_mounts: t.List[str] = configured_mounts
         return self._docker_mounts
 
     @property
-    @lru_cache
-    def airbyte_catalog(self):
-        with TemporaryDirectory() as tmpdir:
-            with open(f"{tmpdir}/config.json", "wb") as f:
+    @lru_cache(maxsize=None)
+    def airbyte_catalog(self) -> t.Dict[str, t.Any]:
+        """Get the Airbyte catalog."""
+        with TemporaryDirectory() as host_tmpdir:
+            with open(f"{host_tmpdir}/config.json", "wb") as f:
                 f.write(orjson.dumps(self.config.get("airbyte_config", {})))
+            runtime_conf_dir = host_tmpdir if self.is_native() else self.airbyte_mount_dir
             proc = subprocess.run(
-                [
-                    self.connector_bin(),
+                self.to_command(
                     "discover",
                     "--config",
-                    f"{tmpdir}/config.json",
-                ] if self.is_pip_installable() else
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-i",
-                    "-v",
-                    f"{tmpdir}:{self.conf_dir}",
-                ]
-                + self.docker_mounts
-                + [
-                    f"{self.image}:{self.tag}",
-                    "discover",
-                    "--config",
-                    f"{self.conf_dir}/config.json",
-                ],
+                    f"{runtime_conf_dir}/config.json",
+                    docker_args=[
+                        "--rm",
+                        "-i",
+                        "-v",
+                        f"{host_tmpdir}:{self.airbyte_mount_dir}",
+                        *self.docker_mounts,
+                    ],
+                ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -662,7 +661,8 @@ class TapAirbyte(Tap):
         )
 
     @property
-    def configured_airbyte_catalog(self) -> dict:
+    def configured_airbyte_catalog(self) -> t.Dict[str, t.Any]:
+        """Get the Airbyte catalog with only selected streams."""
         output = {"streams": []}
         for stream in self.airbyte_catalog["streams"]:
             entry = self.catalog.get_stream(stream["name"])
@@ -672,7 +672,8 @@ class TapAirbyte(Tap):
                 continue
             try:
                 sync_mode = REPLICATION_METHOD_MAP.get(
-                    entry.replication_method.upper(), stream["supported_sync_modes"][0]
+                    (entry.replication_method or "FULL_REFRESH").upper(),
+                    stream["supported_sync_modes"][0],
                 )
                 if sync_mode.lower() not in stream["supported_sync_modes"]:
                     sync_mode = stream["supported_sync_modes"][0]
@@ -687,11 +688,13 @@ class TapAirbyte(Tap):
             )
         return output
 
-    def load_state(self, state: Dict[str, Any]) -> None:
+    def load_state(self, state: t.Dict[str, t.Any]) -> None:
+        """Load the state from the Airbyte source."""
         super().load_state(state)
         self.airbyte_state = state
 
-    def sync_all(self) -> None:  # type: ignore
+    def sync_all(self) -> None:
+        """Sync all streams from the Airbyte source."""
         stream: Stream
         self.eof_received = False
         for stream in self.streams.values():
@@ -704,6 +707,8 @@ class TapAirbyte(Tap):
         t1 = time.perf_counter()
         with self.run_read() as airbyte_job:
             # Main processor loop
+            if airbyte_job.stdout is None:
+                raise AirbyteException("Could not start Airbyte process.")
             while TapAirbyte.pipe_status is not PIPE_CLOSED:
                 message = airbyte_job.stdout.readline()
                 if not message and airbyte_job.poll() is not None:
@@ -757,9 +762,10 @@ class TapAirbyte(Tap):
             stream.log_sync_costs()
         self.logger.info(f"Synced {len(self.streams)} streams in {t2 - t1:0.2f} seconds.")
 
-    def discover_streams(self) -> List[Stream]:
-        output_streams: List[AirbyteStream] = []
-        stream: Dict[str, Any]
+    def discover_streams(self) -> t.List["AirbyteStream"]:
+        """Discover streams from the Airbyte catalog."""
+        output_streams: t.List[AirbyteStream] = []
+        stream: t.Dict[str, t.Any]
         for stream in self.airbyte_catalog["streams"]:
             airbyte_stream = AirbyteStream(
                 tap=self,
@@ -770,20 +776,28 @@ class TapAirbyte(Tap):
                 # this is [str, ...?] in the Airbyte catalog
                 if "cursor_field" in stream and isinstance(stream["cursor_field"][0], str):
                     airbyte_stream.replication_key = stream["cursor_field"][0]
-                elif "source_defined_cursor" in stream and isinstance(stream["source_defined_cursor"], bool) and stream["source_defined_cursor"]:
+                elif (
+                    "source_defined_cursor" in stream
+                    and isinstance(stream["source_defined_cursor"], bool)
+                    and stream["source_defined_cursor"]
+                ):
                     # The stream has a source defined cursor. Try using that
-                    if "default_cursor_field" in stream and isinstance(stream["default_cursor_field"][0], str):
+                    if "default_cursor_field" in stream and isinstance(
+                        stream["default_cursor_field"][0], str
+                    ):
                         airbyte_stream.replication_key = stream["default_cursor_field"][0]
                     else:
-                        self.logger.warning(f"Stream {stream['name']} has a source defined cursor but no default_cursor_field.")
+                        self.logger.warning(
+                            f"Stream {stream['name']} has a source defined cursor but no default_cursor_field."
+                        )
             except IndexError:
                 pass
             try:
                 # this is [[str, ...]] in the Airbyte catalog
-                if "primary_key" in stream and isinstance(stream["primary_key"][0], List):
+                if "primary_key" in stream and isinstance(stream["primary_key"][0], t.List):
                     airbyte_stream.primary_keys = stream["primary_key"][0]
                 elif "source_defined_primary_key" in stream and isinstance(
-                    stream["source_defined_primary_key"][0], List
+                    stream["source_defined_primary_key"][0], t.List
                 ):
                     airbyte_stream.primary_keys = stream["source_defined_primary_key"][0]
             except IndexError:
@@ -798,7 +812,7 @@ class AirbyteStream(Stream):
     def __init__(self, tap: TapAirbyte, schema: dict, name: str) -> None:
         super().__init__(tap, schema, name)
         self.parent = tap
-        self._buffer: Optional[Queue] = None
+        self._buffer: t.Optional[Queue] = None
 
     def _write_record_message(self, record: dict) -> None:
         for record_message in self._generate_record_messages(record):
@@ -826,7 +840,7 @@ class AirbyteStream(Stream):
                 self._buffer = self.parent.buffers[self.name]
         return self._buffer
 
-    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+    def get_records(self, context: t.Optional[dict]) -> t.Iterable[dict]:
         """Get records from the stream."""
         while (
             self.parent.eof_received is False or not self.buffer.empty()
@@ -847,4 +861,4 @@ class AirbyteStream(Stream):
 
 
 if __name__ == "__main__":
-    TapAirbyte.cli()
+    TapAirbyte.cli()  # type: ignore

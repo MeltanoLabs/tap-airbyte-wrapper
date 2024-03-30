@@ -57,7 +57,10 @@ def test_weather_sync():
 
     for no, test_case, baseline in enumerate(zip(stdout.readlines(), SINGER_DUMP.splitlines())):
         try:
-            parsed_test_case, parsed_baseline = json.loads(test_case), json.loads(baseline)
+            parsed_test_case, parsed_baseline = (
+                json.loads(test_case),
+                json.loads(baseline),
+            )
             if parsed_test_case["type"] == "RECORD":
                 assert (
                     parsed_baseline["type"] == "RECORD"
@@ -77,7 +80,7 @@ def test_poke_sync():
 
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.1.5"},
+            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.0"},
             "airbyte_config": {
                 # sketch -> spore, endeavor, extreme speed, destiny bond w/ focus sash
                 # if you know, you know.
@@ -104,7 +107,10 @@ def test_poke_sync():
 
     for no, test_case, baseline in enumerate(zip(stdout.readlines(), SINGER_DUMP.splitlines())):
         try:
-            parsed_test_case, parsed_baseline = json.loads(test_case), json.loads(baseline)
+            parsed_test_case, parsed_baseline = (
+                json.loads(test_case),
+                json.loads(baseline),
+            )
             if parsed_test_case["type"] == "RECORD":
                 assert (
                     parsed_baseline["type"] == "RECORD"
@@ -147,7 +153,10 @@ def test_pub_apis_sync():
 
     for no, test_case, baseline in enumerate(zip(stdout.readlines(), SINGER_DUMP.splitlines())):
         try:
-            parsed_test_case, parsed_baseline = json.loads(test_case), json.loads(baseline)
+            parsed_test_case, parsed_baseline = (
+                json.loads(test_case),
+                json.loads(baseline),
+            )
             if parsed_test_case["type"] == "RECORD":
                 assert (
                     parsed_baseline["type"] == "RECORD"
@@ -204,7 +213,10 @@ def test_docker_mount_sync():
 
     for no, test_case, baseline in enumerate(zip(stdout.readlines(), SINGER_DUMP.splitlines())):
         try:
-            parsed_test_case, parsed_baseline = json.loads(test_case), json.loads(baseline)
+            parsed_test_case, parsed_baseline = (
+                json.loads(test_case),
+                json.loads(baseline),
+            )
             if parsed_test_case["type"] == "RECORD":
                 assert (
                     parsed_baseline["type"] == "RECORD"
