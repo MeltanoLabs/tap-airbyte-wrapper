@@ -21,6 +21,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         py_version: ["3.8", "3.9", "3.10"]
     runs-on: ubuntu-latest
