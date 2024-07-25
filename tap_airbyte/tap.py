@@ -369,7 +369,6 @@ class TapAirbyte(Tap):
                 "run",
                 *(docker_args or []),
                 f"{self.image}:{self.tag}",
-                "--",
                 *airbyte_cmd,
             ]
         )
