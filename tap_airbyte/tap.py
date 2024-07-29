@@ -163,6 +163,15 @@ class TapAirbyte(Tap):
                 " documentation"
             ),
         ),
+        th.Property(
+            "skip_native_check",
+            th.BooleanType,
+            required=False,
+            default=False,
+            description="Disables the check for natively executable sources. By default, AirByte sources are checked "
+                        "to see if they are able to be executed natively without using containers. This disables that "
+                        "check and forces them to run in containers.",
+        ),
     ).to_dict()
     airbyte_mount_dir: str = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     pipe_status = None
@@ -318,9 +327,9 @@ class TapAirbyte(Tap):
                 check=True,
                 stdout=subprocess.PIPE,
             )
-        if not (self.venv / "bin" / self.source_name).exists():
+        if not (self.venv / ("Scripts" if sys.platform == "win32" else "bin") / self.source_name).exists():
             subprocess.run(
-                [self.venv / "bin" / "pip", "install", self._get_requirement_string()],
+                [self.venv / ("Scripts" if sys.platform == "win32" else "bin") / "pip", "install", self._get_requirement_string()],
                 check=True,
                 stdout=subprocess.PIPE,
             )
@@ -336,21 +345,23 @@ class TapAirbyte(Tap):
     def is_native(self) -> bool:
         """Check if the connector is available on PyPI and can be managed natively without Docker."""
         is_native = False
-        try:
-            response = requests.get(
-                "https://connectors.airbyte.com/files/registries/v0/oss_registry.json",
-                timeout=5,
-            )
-            response.raise_for_status()
-            data = response.json()
-            sources = data["sources"]
-            image_name = self.config["airbyte_spec"]["image"]
-            for source in sources:
-                if source["dockerRepository"] == image_name:
-                    is_native = source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
-                    break
-        except Exception:
-            pass
+        if not self.config['skip_native_check']:
+            try:
+                response = requests.get(
+                    "https://connectors.airbyte.com/files/registries/v0/oss_registry.json",
+                    timeout=5,
+                )
+                response.raise_for_status()
+                data = response.json()
+                sources = data["sources"]
+                image_name = self.config["airbyte_spec"]["image"]
+                for source in sources:
+                    if source["dockerRepository"] == image_name:
+                        is_native = source.get("remoteRegistries", {}).get("pypi", {}).get("enabled")
+                        break
+            except Exception:
+                pass
+
         if is_native:
             self._ensure_installed()
         else:
@@ -361,8 +372,22 @@ class TapAirbyte(Tap):
         self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
     ) -> t.List[t.Union[str, Path]]:
         """Construct the command to run the Airbyte connector."""
+        test = (
+            [self.venv / ("Scripts" if sys.platform == "win32" else "bin") / self.source_name, *airbyte_cmd]
+            if self.is_native()
+            else [
+                "docker",
+                "run",
+                *(docker_args or []),
+                f"{self.image}:{self.tag}",
+                *airbyte_cmd,
+            ]
+        )
+
+
+
         return (
-            [self.venv / "bin" / self.source_name, *airbyte_cmd]
+            [self.venv / ("Scripts" if sys.platform == "win32" else "bin") / self.source_name, *airbyte_cmd]
             if self.is_native()
             else [
                 "docker",
