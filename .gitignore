@@ -4,6 +4,7 @@
 # Ignore meltano internal cache and sqlite systemdb
 
 .meltano/
+.idea/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

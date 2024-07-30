@@ -372,20 +372,6 @@ class TapAirbyte(Tap):
         self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
     ) -> t.List[t.Union[str, Path]]:
         """Construct the command to run the Airbyte connector."""
-        test = (
-            [self.venv / ("Scripts" if sys.platform == "win32" else "bin") / self.source_name, *airbyte_cmd]
-            if self.is_native()
-            else [
-                "docker",
-                "run",
-                *(docker_args or []),
-                f"{self.image}:{self.tag}",
-                *airbyte_cmd,
-            ]
-        )
-
-
-
         return (
             [self.venv / ("Scripts" if sys.platform == "win32" else "bin") / self.source_name, *airbyte_cmd]
             if self.is_native()
@@ -529,10 +515,7 @@ class TapAirbyte(Tap):
     def run_read(self) -> t.Iterator[subprocess.Popen]:
         """Run the read command for the Airbyte connector."""
         with TemporaryDirectory() as host_tmpdir:
-            with (
-                open(f"{host_tmpdir}/config.json", "wb") as config,
-                open(f"{host_tmpdir}/catalog.json", "wb") as catalog,
-            ):
+            with open(f"{host_tmpdir}/config.json", "wb") as config, open(f"{host_tmpdir}/catalog.json", "wb") as catalog:
                 config.write(orjson.dumps(self.config.get("airbyte_config", {})))
                 catalog.write(orjson.dumps(self.configured_airbyte_catalog))
             if self.airbyte_state:
@@ -569,7 +552,7 @@ class TapAirbyte(Tap):
                 self.logger.debug("Waiting for Airbyte process to terminate.")
                 returncode = proc.wait()
                 if not self.eof_received and TapAirbyte.pipe_status is not PIPE_CLOSED:
-                    # If EOF was not received, the process was killed and we should raise an exception
+                    # If EOF was not received, the process was killed, and we should raise an exception
                     type_, value, _ = sys.exc_info()
                     err = type_.__name__ if type_ else "UnknownError"
                     raise AirbyteException(f"Airbyte process terminated early:\n{err}: {value}")
