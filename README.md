@@ -12,15 +12,16 @@ Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
 
 ## Configuration 📝
 
-| Setting             | Required | Default | Description |
-|:--------------------|:--------:|:-------:|:------------|
-| airbyte_spec        | True     | None    | Specification for the Airbyte source connector. This is a JSON object minimally containing the `image` key. The `tag` key is optional and defaults to `latest`. |
-| airbyte_config      | False    | None    | Configuration to pass through to the Airbyte source connector, this can be gleaned by running the the tap with the `--about` flag and the `--config` flag pointing to a file containing the `airbyte_spec` configuration. This is a JSON object. |
-| docker_mounts       | False    | None    | Docker mounts to mount to the container. Expects a list of maps containing source, target, and type as is documented in the docker --mount [documentation](https://docs.docker.com/storage/bind-mounts/#choose-the--v-or---mount-flag) |
-| stream_maps         | False    | None    | Config object for stream maps capability. For more information check out [Stream Maps](https://sdk.meltano.com/en/latest/stream_maps.html). |
-| stream_map_config   | False    | None    | User-defined config values to be used within map expressions. |
-| flattening_enabled  | False    | None    | 'True' to enable schema flattening and automatically expand nested properties. |
-| flattening_max_depth| False    | None    | The max depth to flatten schemas. |
+| Setting              | Required | Default | Description                                                                                                                                                                                                                                      |
+|:---------------------|:--------:|:-------:|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| airbyte_spec         |   True   |  None   | Specification for the Airbyte source connector. This is a JSON object minimally containing the `image` key. The `tag` key is optional and defaults to `latest`.                                                                                  |
+| airbyte_config       |  False   |  None   | Configuration to pass through to the Airbyte source connector, this can be gleaned by running the the tap with the `--about` flag and the `--config` flag pointing to a file containing the `airbyte_spec` configuration. This is a JSON object. |
+| docker_mounts        |  False   |  None   | Docker mounts to mount to the container. Expects a list of maps containing source, target, and type as is documented in the docker --mount [documentation](https://docs.docker.com/storage/bind-mounts/#choose-the--v-or---mount-flag)           |
+| skip_native_check    |  False   |  False  | Disables the check for natively executable sources. By default, AirByte sources are checked to see if they are able to be executed natively without using containers. This disables that check and forces them to run in containers.             |
+| stream_maps          |  False   |  None   | Config object for stream maps capability. For more information check out [Stream Maps](https://sdk.meltano.com/en/latest/stream_maps.html).                                                                                                      |
+| stream_map_config    |  False   |  None   | User-defined config values to be used within map expressions.                                                                                                                                                                                    |
+| flattening_enabled   |  False   |  None   | 'True' to enable schema flattening and automatically expand nested properties.                                                                                                                                                                   |
+| flattening_max_depth |  False   |  None   | The max depth to flatten schemas.                                                                                                                                                                                                                |
 
 
 ### Configure using environment variables ✏️
@@ -51,12 +52,12 @@ First, configure your tap by creating a configuration json file. In this example
     "credentials": {
       "access_token": "..."
     },
-    "repositories": "z3z1ma/*",
+    "repositories": "z3z1ma/*"
   }
 }
 ```
 
-Run the built in Airbyte connection test to validate your configuration like this where `github.json` represents the above config (note the choice of file name is purely for illustration):
+Run the built-in Airbyte connection test to validate your configuration like this where `github.json` represents the above config (note the choice of file name is purely for illustration):
 
 ```bash
 tap-airbyte --config ./github.json --test
