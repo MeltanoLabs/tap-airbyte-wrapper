@@ -82,7 +82,7 @@ def test_poke_sync():
         config={
             "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.10"},
             "airbyte_config": {
-                # sketch -> spore, endeavor, extreme speed, destiny bond w/ focus sash
+                # sketch -> spore, shell smash, baton pass, focus sash
                 # if you know, you know.
                 "pokemon_name": "smeargle",
             },
@@ -131,7 +131,7 @@ def test_pub_apis_sync():
 
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-public-apis", "tag": "0.1.0"},
+            "airbyte_spec": {"image": "airbyte/source-public-apis", "tag": "0.2.9"},
             "airbyte_config": {},
         },
     )
@@ -177,7 +177,7 @@ def test_docker_mount_sync():
     data = Path(__file__).parent.joinpath("fixtures", "KPHX.csv")
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.2.32"},
+            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.5.3"},
             "airbyte_config": {
                 "dataset_name": "test",
                 "format": "csv",
