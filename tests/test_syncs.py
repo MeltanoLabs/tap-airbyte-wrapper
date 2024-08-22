@@ -74,7 +74,7 @@ def test_weather_sync():
             pass
 
 
-def test_poke_sync():
+def test_poke_sync_docker():
     """Run a sync and compare the output to a fixture derived from a public dataset.
     This test provides a very strong guarantee that the tap is working as expected."""
 
@@ -82,10 +82,11 @@ def test_poke_sync():
         config={
             "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.0"},
             "airbyte_config": {
-                # sketch -> spore, endeavor, extreme speed, destiny bond w/ focus sash
+                # sketch -> spore, shell smash, baton pass, focus sash
                 # if you know, you know.
                 "pokemon_name": "smeargle",
             },
+            "skip_native_check": True,
         },
     )
 
@@ -186,6 +187,7 @@ def test_docker_mount_sync():
                     "storage": "local",
                 },
             },
+            "skip_native_check": True,
             "docker_mounts": [
                 {
                     "source": str(data.parent),
@@ -233,6 +235,6 @@ def test_docker_mount_sync():
 
 if __name__ == "__main__":
     test_weather_sync()
-    test_poke_sync()
+    test_poke_sync_docker()
     _test_pub_apis_sync()
     test_docker_mount_sync()
