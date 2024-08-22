@@ -34,6 +34,7 @@ jobs:
     - name: Install Tap Airbyte Wrapper
       run: |
         python -m pip install --upgrade pip poetry
+        poetry env use ${{ matrix.py_version }}
         poetry install
     - name: Run SDK Tests
       run: |

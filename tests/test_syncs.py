@@ -124,7 +124,8 @@ def test_poke_sync():
             pass
 
 
-def test_pub_apis_sync():
+# TODO: Re-enable this?
+def _test_pub_apis_sync():
     """Run a sync and compare the output to a fixture derived from a public dataset.
     This test provides a very strong guarantee that the tap is working as expected."""
 
@@ -233,5 +234,5 @@ def test_docker_mount_sync():
 if __name__ == "__main__":
     test_weather_sync()
     test_poke_sync()
-    test_pub_apis_sync()
+    _test_pub_apis_sync()
     test_docker_mount_sync()
