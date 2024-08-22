@@ -25,7 +25,7 @@ def test_weather_sync():
 
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.2.32"},
+            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.5.8"},
             "airbyte_config": {
                 "dataset_name": "test",
                 "format": "csv",
@@ -176,7 +176,7 @@ def test_docker_mount_sync():
     data = Path(__file__).parent.joinpath("fixtures", "KPHX.csv")
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.2.32"},
+            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.5.8"},
             "airbyte_config": {
                 "dataset_name": "test",
                 "format": "csv",
