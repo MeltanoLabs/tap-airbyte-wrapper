@@ -34,6 +34,7 @@ import click
 import orjson
 import requests
 import singer_sdk._singerlib as singer
+import virtualenv
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th
 from singer_sdk.cli import common_options
@@ -163,10 +164,26 @@ class TapAirbyte(Tap):
                 " documentation"
             ),
         ),
+        th.Property(
+            "skip_native_check",
+            th.BooleanType,
+            required=False,
+            default=False,
+            description="Disables the check for natively executable sources. By default, AirByte sources are checked "
+                        "to see if they are able to be executed natively without using containers. This disables that "
+                        "check and forces them to run in containers.",
+        ),
+        th.Property(
+            "native_source_python",
+            th.StringType,
+            required=False,
+            description="Path to Python executable to use.",
+        )
+
     ).to_dict()
     airbyte_mount_dir: str = os.getenv("AIRBYTE_MOUNT_DIR", "/tmp")
     pipe_status = None
-
+    eof_received = None
     # Airbyte image to run
     _image: t.Optional[str] = None  # type: ignore
     _tag: t.Optional[str] = None  # type: ignore
@@ -212,14 +229,14 @@ class TapAirbyte(Tap):
             context_settings={"help_option_names": ["--help"]},
         )
         def cli(
-            version: bool = False,
-            about: bool = False,
-            discover: bool = False,
-            test: bool = False,
-            config: tuple[str, ...] = (),
-            state: t.Optional[str] = None,
-            catalog: t.Optional[str] = None,
-            format: t.Optional[str] = None,
+                version: bool = False,
+                about: bool = False,
+                discover: bool = False,
+                test: bool = False,
+                config: tuple[str, ...] = (),
+                state: t.Optional[str] = None,
+                catalog: t.Optional[str] = None,
+                cli_format: t.Optional[str] = None,
         ) -> None:
             if version:
                 cls.print_version()
@@ -255,13 +272,13 @@ class TapAirbyte(Tap):
                     spec = tap.run_spec()["connectionSpecification"]
                 except Exception:
                     cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
-                    cls.print_about(output_format=format)
+                    cls.print_about(output_format=cli_format)
                 else:
                     cls.logger.info(
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
                     )
                     cls.config_jsonschema["properties"]["airbyte_config"] = spec
-                    cls.print_about(output_format=format)
+                    cls.print_about(output_format=cli_format)
                     cls.print_spec_as_config(spec)
                 return
             # End modification
@@ -310,20 +327,59 @@ class TapAirbyte(Tap):
             sys.exit(1)
         self.logger.info("Successfully executed %s version.", self.container_runtime)
 
-    def _ensure_installed(self) -> None:
-        """Install the source connector from PyPI if necessary."""
-        if not self.venv.exists():
-            subprocess.run(
-                [sys.executable, "-m", "venv", self.venv],
-                check=True,
-                stdout=subprocess.PIPE,
-            )
-        if not (self.venv / "bin" / self.source_name).exists():
-            subprocess.run(
-                [self.venv / "bin" / "pip", "install", self._get_requirement_string()],
-                check=True,
-                stdout=subprocess.PIPE,
-            )
+    @property
+    def native_venv_path(self) -> Path:
+        """Get the path to the virtual environment for the connector."""
+        return Path(__file__).parent.resolve() / f".venv-airbyte-{self.source_name}"
+
+    @property
+    def native_venv_bin_path(self) -> Path:
+        """Get the path to the virtual environment for the connector bin."""
+        return self.native_venv_path / ("Scripts" if sys.platform == "win32" else "bin")
+
+    def setup_native_connector_venv(self) -> None:
+        """Creates a virtual environment and installs the source connector via PyPI"""
+        if self.native_venv_path.exists():
+            self.logger.info("Virtual environment for source already exists.")
+            return
+
+        self.logger.info(
+            "Creating virtual environment at %s, using %s Python.",
+            self.native_venv_path,
+            self.config.get("native_source_python", "default")
+        )
+
+        # Construct the arguments list for virtualenv
+        args = []
+
+        if self.config.get("native_source_python"):
+            args.append(["-p", self.config["native_source_python"]])
+        args.append(str(self.native_venv_path))
+
+        # Run the virtualenv command
+        virtualenv.cli_run(args)
+
+        self.logger.info(
+            "Installing %s in the virtual environment..",
+            self._get_requirement_string()
+        )
+
+        subprocess.run(
+            [self.native_venv_bin_path / "pip", "install",
+             self._get_requirement_string()],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+
+    def _run_pip_check(self) -> str:
+        process = subprocess.run(
+            [self.native_venv_bin_path / "pip", "check"],
+            capture_output=True,
+            text=True
+        )
+
+        return process.stdout
 
     def _get_requirement_string(self) -> str:
         """Get the requirement string for the source connector."""
@@ -336,6 +392,8 @@ class TapAirbyte(Tap):
     def is_native(self) -> bool:
         """Check if the connector is available on PyPI and can be managed natively without Docker."""
         is_native = False
+        if self.config.get("skip_native_check", False):
+            return is_native
         try:
             response = requests.get(
                 "https://connectors.airbyte.com/files/registries/v0/oss_registry.json",
@@ -352,13 +410,15 @@ class TapAirbyte(Tap):
         except Exception:
             pass
         if is_native:
-            self._ensure_installed()
+            self.setup_native_connector_venv()
+            pip_result = self._run_pip_check()
+            self.logger.info(f"pip check results: {pip_result}")
         else:
             self._ensure_oci()
         return is_native
 
     def to_command(
-        self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
+            self, *airbyte_cmd: str, docker_args: t.Optional[t.List[str]] = None
     ) -> t.List[t.Union[str, Path]]:
         """Construct the command to run the Airbyte connector."""
         return (
@@ -726,8 +786,8 @@ class TapAirbyte(Tap):
                     )
                     stream_buffer.put_nowait(airbyte_message["record"]["data"])
                 elif airbyte_message["type"] in (
-                    AirbyteMessage.LOG,
-                    AirbyteMessage.TRACE,
+                        AirbyteMessage.LOG,
+                        AirbyteMessage.TRACE,
                 ):
                     self._process_log_message(airbyte_message)
                 elif airbyte_message["type"] == AirbyteMessage.STATE:
@@ -746,7 +806,7 @@ class TapAirbyte(Tap):
                         singer.write_message(singer.StateMessage(self.airbyte_state))
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
-        # Daemon threads will be terminated when the main thread exits
+        # Daemon threads will be terminated when the main thread exits,
         # so we do not need to wait on them to join after SIGPIPE
         if TapAirbyte.pipe_status is not PIPE_CLOSED:
             self.logger.info("Waiting for sync threads to finish...")
@@ -776,13 +836,13 @@ class TapAirbyte(Tap):
                 if "cursor_field" in stream and isinstance(stream["cursor_field"][0], str):
                     airbyte_stream.replication_key = stream["cursor_field"][0]
                 elif (
-                    "source_defined_cursor" in stream
-                    and isinstance(stream["source_defined_cursor"], bool)
-                    and stream["source_defined_cursor"]
+                        "source_defined_cursor" in stream
+                        and isinstance(stream["source_defined_cursor"], bool)
+                        and stream["source_defined_cursor"]
                 ):
                     # The stream has a source defined cursor. Try using that
                     if "default_cursor_field" in stream and isinstance(
-                        stream["default_cursor_field"][0], str
+                            stream["default_cursor_field"][0], str
                     ):
                         airbyte_stream.replication_key = stream["default_cursor_field"][0]
                     else:
@@ -796,7 +856,7 @@ class TapAirbyte(Tap):
                 if "primary_key" in stream and isinstance(stream["primary_key"][0], t.List):
                     airbyte_stream.primary_keys = stream["primary_key"][0]
                 elif "source_defined_primary_key" in stream and isinstance(
-                    stream["source_defined_primary_key"][0], t.List
+                        stream["source_defined_primary_key"][0], t.List
                 ):
                     airbyte_stream.primary_keys = stream["source_defined_primary_key"][0]
             except IndexError:
@@ -842,7 +902,7 @@ class AirbyteStream(Stream):
     def get_records(self, context: t.Optional[dict]) -> t.Iterable[dict]:
         """Get records from the stream."""
         while (
-            self.parent.eof_received is False or not self.buffer.empty()
+                self.parent.eof_received is False or not self.buffer.empty()
         ) and TapAirbyte.pipe_status is not PIPE_CLOSED:
             try:
                 # The timeout permits the consumer to re-check the producer is alive
