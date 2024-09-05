@@ -10,22 +10,21 @@
 # substantial portions of the Software.
 
 """Tests standard tap features using the built-in SDK tests library"""
-import os
 
-from singer_sdk.testing import get_standard_tap_tests
+from singer_sdk.testing.legacy import get_standard_tap_tests
 
 from tap_airbyte.tap import TapAirbyte
 
 
-# Run standard built-in tap tests from the SDK:
-def test_standard_tap_tests():
+# Run standard built-in tap tests from the SDK for native images:
+def test_standard_tap_tests_native():
     """Run standard tap tests from the SDK."""
     tests = get_standard_tap_tests(
         TapAirbyte,
         config={
-            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.1.5"},
+            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.14"},
             "airbyte_config": {
-                "pokemon_name": "infernape",
+                "pokemon_name": "chansey",
             },
         },
     )
@@ -33,5 +32,23 @@ def test_standard_tap_tests():
         test()
 
 
+# Run standard built-in tap tests from the SDK for non-native images:
+def test_standard_tap_tests_docker():
+    """Run standard tap tests from the SDK."""
+    tests = get_standard_tap_tests(
+        TapAirbyte,
+        config={
+            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.14"},
+            "airbyte_config": {
+                "pokemon_name": "blissey",
+            },
+            "skip_native_check": True
+        }
+    )
+    for test in tests:
+        test()
+
+
 if __name__ == "__main__":
-    test_standard_tap_tests()
+    test_standard_tap_tests_native()
+    test_standard_tap_tests_docker()

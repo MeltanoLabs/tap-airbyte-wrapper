@@ -25,7 +25,7 @@ def test_weather_sync():
 
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.2.32"},
+            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.5.3"},
             "airbyte_config": {
                 "dataset_name": "test",
                 "format": "csv",
@@ -74,15 +74,15 @@ def test_weather_sync():
             pass
 
 
-def test_poke_sync():
+def test_poke_sync_native():
     """Run a sync and compare the output to a fixture derived from a public dataset.
     This test provides a very strong guarantee that the tap is working as expected."""
 
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.0"},
+            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.14"},
             "airbyte_config": {
-                # sketch -> spore, endeavor, extreme speed, destiny bond w/ focus sash
+                # sketch -> spore, shell smash, baton pass, focus sash
                 # if you know, you know.
                 "pokemon_name": "smeargle",
             },
@@ -123,21 +123,25 @@ def test_poke_sync():
         except json.JSONDecodeError:
             pass
 
-
-def test_pub_apis_sync():
+def test_poke_sync_docker():
     """Run a sync and compare the output to a fixture derived from a public dataset.
     This test provides a very strong guarantee that the tap is working as expected."""
 
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-public-apis", "tag": "0.1.0"},
-            "airbyte_config": {},
+            "airbyte_spec": {"image": "airbyte/source-pokeapi", "tag": "0.2.14"},
+            "airbyte_config": {
+                # sketch -> spore, shell smash, baton pass, focus sash
+                # if you know, you know.
+                "pokemon_name": "smeargle",
+            },
+            "skip_native_check": True
         },
     )
 
     tap.ORJSON_OPTS |= orjson.OPT_SORT_KEYS
 
-    FIXTURE = Path(__file__).parent.joinpath("fixtures", "PUBLIC_APIS.singer")
+    FIXTURE = Path(__file__).parent.joinpath("fixtures", "SMEARGLE.singer")
     SINGER_DUMP = FIXTURE.read_text()
 
     stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
@@ -176,7 +180,7 @@ def test_docker_mount_sync():
     data = Path(__file__).parent.joinpath("fixtures", "KPHX.csv")
     tap = TapAirbyte(
         config={
-            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.2.32"},
+            "airbyte_spec": {"image": "airbyte/source-file", "tag": "0.5.3"},
             "airbyte_config": {
                 "dataset_name": "test",
                 "format": "csv",
@@ -185,6 +189,7 @@ def test_docker_mount_sync():
                     "storage": "local",
                 },
             },
+            "skip_native_check": True,
             "docker_mounts": [
                 {
                     "source": str(data.parent),
@@ -232,6 +237,6 @@ def test_docker_mount_sync():
 
 if __name__ == "__main__":
     test_weather_sync()
-    test_poke_sync()
-    test_pub_apis_sync()
+    test_poke_sync_docker()
+    test_poke_sync_native()
     test_docker_mount_sync()
