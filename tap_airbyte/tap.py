@@ -856,7 +856,7 @@ class TapAirbyte(Tap):
                         unpacked_state = state_message["legacy"]
 
                     # Keep the legacy state behavior, but append the new state under a new key.
-                    # Deepcopy here since existing_airbyte_state_v2 can refernce the same object.
+                    # Deepcopy here since existing_airbyte_state_v2 can reference the same object.
                     self.airbyte_state = deepcopy(unpacked_state)
                     self.airbyte_state['airbyte_state'] = existing_airbyte_state_v2
 
