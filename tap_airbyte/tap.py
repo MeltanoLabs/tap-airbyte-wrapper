@@ -92,6 +92,7 @@ class AirbyteMessage(str, Enum):
     CATALOG = "CATALOG"
     SPEC = "SPEC"
     CONNECTION_STATUS = "CONNECTION_STATUS"
+    CONTROL = "CONTROL"
 
 
 # These translate between Singer's replication method and Airbyte's sync mode
@@ -862,6 +863,8 @@ class TapAirbyte(Tap):
 
                     with STDOUT_LOCK:
                         singer.write_message(singer.StateMessage(self.airbyte_state))
+                elif airbyte_message["type"] == AirbyteMessage.CONTROL:
+                    pass
                 else:
                     self.logger.warning("Unhandled message: %s", airbyte_message)
         # Daemon threads will be terminated when the main thread exits,
