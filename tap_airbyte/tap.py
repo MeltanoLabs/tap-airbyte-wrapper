@@ -399,6 +399,11 @@ class TapAirbyte(Tap):
 
     def _is_native_connector(self) -> bool:
         """Check if the connector is available on PyPI and can be managed natively without Docker."""
+        # If force_native is set, skip the check and return True
+        if self.config.get("force_native"):
+            self.logger.info("Forcing native mode as requested by configuration.")
+            return True
+
         is_native = False
         try:
             response = requests.get(
@@ -420,9 +425,9 @@ class TapAirbyte(Tap):
     @lru_cache(maxsize=None)
     def is_native(self) -> bool:
         """Check if the connector is available on PyPI and can be managed natively without Docker."""
-        is_native = self.config.get("force_native", False)
         if self.config.get("skip_native_check", False):
-            return is_native
+            return False
+
         is_native = self._is_native_connector()
         if is_native:
             self.setup_native_connector_venv()
