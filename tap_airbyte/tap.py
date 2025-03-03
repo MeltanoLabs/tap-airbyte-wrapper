@@ -180,6 +180,13 @@ class TapAirbyte(Tap):
             th.StringType,
             required=False,
             description="Path to Python executable to use.",
+        ),
+        th.Property(
+            "force_native",
+            th.BooleanType,
+            required=False,
+            default=False,
+            description="This flag forces the connector to run in native mode without checking.",
         )
 
     ).to_dict()
@@ -390,12 +397,9 @@ class TapAirbyte(Tap):
             name += f"~={self.config['airbyte_spec']['tag']}"
         return name
 
-    @lru_cache(maxsize=None)
-    def is_native(self) -> bool:
+    def _is_native_connector(self) -> bool:
         """Check if the connector is available on PyPI and can be managed natively without Docker."""
         is_native = False
-        if self.config.get("skip_native_check", False):
-            return is_native
         try:
             response = requests.get(
                 "https://connectors.airbyte.com/files/registries/v0/oss_registry.json",
@@ -411,6 +415,15 @@ class TapAirbyte(Tap):
                     break
         except Exception:
             pass
+        return is_native
+
+    @lru_cache(maxsize=None)
+    def is_native(self) -> bool:
+        """Check if the connector is available on PyPI and can be managed natively without Docker."""
+        is_native = self.config.get("force_native", False)
+        if self.config.get("skip_native_check", False):
+            return is_native
+        is_native = self._is_native_connector()
         if is_native:
             self.setup_native_connector_venv()
             pip_result = self._run_pip_check()
