@@ -246,7 +246,7 @@ class TapAirbyte(Tap):
                 config: tuple[str, ...] = (),
                 state: t.Optional[str] = None,
                 catalog: t.Optional[str] = None,
-                output_format: t.Optional[str] = None,
+                about_format: t.Optional[str] = None,
         ) -> None:
             if version:
                 cls.print_version()
@@ -282,7 +282,7 @@ class TapAirbyte(Tap):
                     spec = tap.run_spec()["connectionSpecification"]
                 except Exception:
                     cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
-                    cls.print_about(output_format=abou_format)
+                    cls.print_about(output_format=about_format)
                 else:
                     cls.logger.info(
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
