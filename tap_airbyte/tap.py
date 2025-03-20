@@ -212,6 +212,7 @@ class TapAirbyte(Tap):
     def cli(cls) -> t.Callable:
         @common_options.PLUGIN_VERSION
         @common_options.PLUGIN_ABOUT
+        @common_options.PLUGIN_ABOUT_FORMAT
         @common_options.PLUGIN_CONFIG
         @click.option(
             "--discover",
@@ -245,7 +246,7 @@ class TapAirbyte(Tap):
                 config: tuple[str, ...] = (),
                 state: t.Optional[str] = None,
                 catalog: t.Optional[str] = None,
-                cli_format: t.Optional[str] = None,
+                output_format: t.Optional[str] = None,
         ) -> None:
             if version:
                 cls.print_version()
@@ -281,13 +282,13 @@ class TapAirbyte(Tap):
                     spec = tap.run_spec()["connectionSpecification"]
                 except Exception:
                     cls.logger.info("Tap-Airbyte instantiation failed. Printing basic about info.")
-                    cls.print_about(output_format=cli_format)
+                    cls.print_about(output_format=abou_format)
                 else:
                     cls.logger.info(
                         "Tap-Airbyte instantiation succeeded. Printing spec-enriched about info."
                     )
                     cls.config_jsonschema["properties"]["airbyte_config"] = spec
-                    cls.print_about(output_format=cli_format)
+                    cls.print_about(output_format=about_format)
                     cls.print_spec_as_config(spec)
                 return
             # End modification
